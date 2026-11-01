@@ -1,5 +1,5 @@
 {
-  "heartbeat_epoch": 1793576659,
+  "heartbeat_epoch": 1793578099,
   "symbol": "XAUUSDm",
   "asset": "GOLD",
   "source": "Public Activity Delta Bridge",
@@ -8,9 +8,9 @@
   "time_format": "12-hour (hh:mm AM/PM)",
   "day_open_time": "2026.10.30 00:00:00",
   "day_open_time_bst": "2026.10.30 06:00 AM",
-  "broker_time": "2026.11.01 17:44:17",
-  "broker_time_bst": "2026.11.01 11:44 PM",
-  "current_time_bst": "11:44 PM",
+  "broker_time": "2026.11.01 18:08:17",
+  "broker_time_bst": "2026.11.02 12:08 AM",
+  "current_time_bst": "12:08 AM",
   "last_update_type": "HEARTBEAT",
   "total_history_days": 26,
   "market": {

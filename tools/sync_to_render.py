@@ -72,6 +72,9 @@ def main():
                     with open(delta_file, "r", encoding="utf-8", errors="ignore") as f:
                         payload = json.load(f)
 
+                    payload["heartbeat_epoch"] = int(time.time())
+                    payload["mt5_online"] = True
+
                     res = requests.post(sync_endpoint, json=payload, timeout=5)
                     if res.status_code == 200:
                         last_sent_mtime = curr_mtime

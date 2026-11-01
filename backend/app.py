@@ -260,9 +260,17 @@ async def get_delta(date: Optional[str] = Query(None, description="Optional date
     if not raw_data:
         cached = load_cached_payload()
         if cached:
-            cached["mt5_online"] = False
-            if "diagnostics" in cached:
-                cached["diagnostics"]["error_message"] = "MT5 offline. Serving last recorded snapshot."
+            last_sync = cached.get("last_sync_time", 0)
+            # If updated via /api/sync within last 15 seconds, MT5 bridge is actively streaming!
+            is_recent_sync = (now - last_sync) <= 15.0
+            cached["mt5_online"] = is_recent_sync
+            if is_recent_sync:
+                if "diagnostics" not in cached:
+                    cached["diagnostics"] = {}
+                cached["diagnostics"]["error_message"] = "Connected via Cloud Sync."
+            else:
+                if "diagnostics" in cached:
+                    cached["diagnostics"]["error_message"] = "MT5 offline. Serving last recorded snapshot."
             raw_data = merge_and_assemble_payload(cached, date)
             return raw_data
 
@@ -284,7 +292,7 @@ async def get_delta(date: Optional[str] = Query(None, description="Optional date
 @app.post("/api/sync")
 async def sync_data_from_mt5(request: Request):
     """
-    Receives live delta JSON from Oracle VPS or remote MT5 instance and merges it into the cloud database.
+    Receives live delta JSON from Oracle VPS or PC MT5 instance and merges it into the cloud database.
     """
     global last_known_payload
     try:
@@ -292,9 +300,12 @@ async def sync_data_from_mt5(request: Request):
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Invalid JSON: {e}")
 
+    now = time.time()
     merged = merge_and_assemble_payload(incoming_data, None)
     merged["mt5_online"] = True
+    merged["last_sync_time"] = now
     merged["last_sync_utc"] = datetime.now(timezone.utc).isoformat()
+    merged["heartbeat_epoch"] = int(now)
     
     last_known_payload = merged
     save_cached_payload(merged)

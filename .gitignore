@@ -12,6 +12,7 @@ mt5/*.log
 
 # Local environment
 .env
+render_url.txt
 .venv/
 env/
 venv/
