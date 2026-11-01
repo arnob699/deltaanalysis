@@ -1,0 +1,23 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Temporary compiler logs
+mt5/*.log
+*.log
+
+# Backup archives
+*.zip
+
+# Local environment
+.env
+.venv/
+env/
+venv/
+ENV/
+
+# IDE files
+.vscode/
+.idea/
+
