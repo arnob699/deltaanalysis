@@ -6,6 +6,8 @@ echo    FXSSI Gold Delta — Live Cloud Stream to Render (1-Sec Sync)
 echo =====================================================================
 echo.
 
+set PYTHONUNBUFFERED=1
+
 set CONFIG_FILE="%~dp0render_url.txt"
 set RENDER_URL=
 
@@ -29,3 +31,4 @@ echo.
 python "%~dp0tools\sync_to_render.py" "%RENDER_URL%"
 
 pause
+

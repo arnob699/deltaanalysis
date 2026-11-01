@@ -20,6 +20,19 @@ except ImportError:
 # Configure your Render app URL: e.g. "https://your-gold-delta.onrender.com"
 RENDER_URL = os.environ.get("RENDER_URL", "").rstrip("/")
 
+def disable_quickedit():
+    """Prevents Windows CMD from freezing the script if someone clicks inside the console."""
+    try:
+        import ctypes
+        kernel32 = ctypes.windll.kernel32
+        h_stdin = kernel32.GetStdHandle(-10)  # STD_INPUT_HANDLE
+        mode = ctypes.c_ulong()
+        if kernel32.GetConsoleMode(h_stdin, ctypes.byref(mode)):
+            new_mode = (mode.value & ~0x0040) | 0x0080  # Disable ENABLE_QUICK_EDIT_MODE
+            kernel32.SetConsoleMode(h_stdin, new_mode)
+    except Exception:
+        pass
+
 def locate_mt5_files_dir() -> Path:
     env_dir = os.environ.get("MT5_FILES_DIR")
     if env_dir and os.path.isdir(env_dir):
@@ -38,9 +51,10 @@ def locate_mt5_files_dir() -> Path:
     return fallback
 
 def main():
-    print("=====================================================================")
-    print("   FXSSI Gold Delta — Oracle/PC to Render 1-Second Cloud Sync Agent")
-    print("=====================================================================")
+    disable_quickedit()
+    print("=====================================================================", flush=True)
+    print("   FXSSI Gold Delta — Oracle/PC to Render 1-Second Cloud Sync Agent", flush=True)
+    print("=====================================================================", flush=True)
     
     global RENDER_URL
     if not RENDER_URL:
@@ -82,7 +96,7 @@ def main():
                         t_now = time.strftime("%H:%M:%S")
                         symbol = payload.get("symbol", "XAUUSD")
                         bid = payload.get("market", {}).get("bid", 0)
-                        print(f"[{t_now}] [SUCCESS] Synced live to Render: {symbol} @ {bid:.2f} (Status: 200 OK)", end="\r")
+                        print(f"[{t_now}] [SUCCESS] Synced live to Render: {symbol} @ {bid:.2f} (Status: 200 OK)", end="\r", flush=True)
                     else:
                         print(f"\n[WARN] Render responded with HTTP {res.status_code}: {res.text[:100]}")
             else:
