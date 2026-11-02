@@ -80,38 +80,47 @@ def main():
     print(f"[OK] Watching MT5 File:  {delta_file}\n")
     print("Syncing live every second to Render... (Press Ctrl+C to stop)\n")
 
-    last_sent_mtime = 0
+    session = requests.Session()
+    # Enable HTTP Keep-Alive and optimize connection pooling
+    adapter = requests.adapters.HTTPAdapter(pool_connections=1, pool_maxsize=2, max_retries=1)
+    session.mount("https://", adapter)
+    session.mount("http://", adapter)
+
+    last_sent_mtime = 0.0
+    last_sync_clock = 0.0
     fail_count = 0
 
     while True:
         try:
             if delta_file.exists():
                 curr_mtime = os.path.getmtime(delta_file)
-                # Read file if modified or at least once every 10 seconds
-                if curr_mtime != last_sent_mtime or (time.time() - last_sent_mtime > 10):
+                now_t = time.time()
+                # Send if MT5 updated the file, or heartbeat every 5 seconds
+                if (curr_mtime != last_sent_mtime) or (now_t - last_sync_clock >= 5.0):
                     with open(delta_file, "r", encoding="utf-8", errors="ignore") as f:
                         payload = safe_load_json(f.read())
 
-                    payload["heartbeat_epoch"] = int(time.time())
+                    payload["heartbeat_epoch"] = int(now_t)
                     payload["mt5_online"] = True
 
-                    res = requests.post(sync_endpoint, json=payload, timeout=5)
+                    res = session.post(sync_endpoint, json=payload, timeout=(3.0, 5.0))
                     if res.status_code == 200:
                         last_sent_mtime = curr_mtime
+                        last_sync_clock = now_t
                         fail_count = 0
                         t_now = time.strftime("%H:%M:%S")
                         symbol = payload.get("symbol", "XAUUSD")
                         bid = payload.get("market", {}).get("bid", 0)
                         print(f"[{t_now}] [SUCCESS] Synced live to Render: {symbol} @ {bid:.2f} (Status: 200 OK)", end="\r", flush=True)
                     else:
-                        print(f"\n[WARN] Render responded with HTTP {res.status_code}: {res.text[:100]}")
+                        print(f"\n[WARN] Render responded with HTTP {res.status_code}: {res.text[:100]}", flush=True)
             else:
-                print(f"[WAIT] Waiting for MT5 to export {delta_file.name}...", end="\r")
+                print(f"[WAIT] Waiting for MT5 to export {delta_file.name}...", end="\r", flush=True)
 
         except Exception as e:
             fail_count += 1
-            if fail_count <= 3:
-                print(f"\n[ERROR] Sync notice: {e}")
+            if fail_count <= 3 or fail_count % 10 == 0:
+                print(f"\n[NOTICE] Sync waiting for Render connection ({fail_count} attempts): {e}", flush=True)
             time.sleep(2)
 
         time.sleep(1)

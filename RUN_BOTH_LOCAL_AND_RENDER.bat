@@ -33,3 +33,4 @@ start "" "%RENDER_URL%"
 python "%~dp0tools\sync_to_render.py" "%RENDER_URL%"
 
 pause
+

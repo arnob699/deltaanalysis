@@ -69,6 +69,7 @@ MASTER_DAYS_FILE = DATA_DIR / "master_days_store.json"
 
 # In-memory snapshot cache
 last_known_payload: Optional[Dict[str, Any]] = None
+_last_disk_save: float = 0.0
 
 def init_master_days_store() -> Dict[str, Dict[str, Any]]:
     """
@@ -107,18 +108,29 @@ def init_master_days_store() -> Dict[str, Dict[str, Any]]:
 master_days_store: Dict[str, Dict[str, Any]] = init_master_days_store()
 
 def load_cached_payload() -> Optional[Dict[str, Any]]:
+    global last_known_payload
+    if last_known_payload is not None:
+        return last_known_payload
     if CACHE_FILE.exists():
         try:
             with open(CACHE_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
+                last_known_payload = json.load(f)
+                return last_known_payload
         except Exception as e:
             print(f"[Public Activity Delta Server] Error loading cached file: {e}")
     return None
 
-def save_cached_payload(payload: Dict[str, Any]) -> None:
+def save_cached_payload(payload: Dict[str, Any], force: bool = False) -> None:
+    global _last_disk_save
+    now = time.time()
+    if not force and (now - _last_disk_save < 30.0):
+        return
     try:
-        with open(CACHE_FILE, "w", encoding="utf-8") as f:
-            json.dump(payload, f, indent=2)
+        tmp_cache = CACHE_FILE.with_suffix(".tmp")
+        with open(tmp_cache, "w", encoding="utf-8") as f:
+            json.dump(payload, f, separators=(',', ':'))
+        tmp_cache.replace(CACHE_FILE)
+        _last_disk_save = now
     except Exception as e:
         print(f"[Public Activity Delta Server] Error writing cache file: {e}")
 
@@ -138,7 +150,7 @@ def extract_available_days_summary(days: List[Dict[str, Any]]) -> List[Dict[str,
         })
     return summary_list
 
-def merge_and_assemble_payload(raw_data: Dict[str, Any], date_query: Optional[str] = None) -> Dict[str, Any]:
+def merge_and_assemble_payload(raw_data: Dict[str, Any], date_query: Optional[str] = None, save_to_disk: bool = False) -> Dict[str, Any]:
     global master_days_store
 
     # Merge any incoming days from MT5
@@ -155,8 +167,6 @@ def merge_and_assemble_payload(raw_data: Dict[str, Any], date_query: Optional[st
             elif dt not in master_days_store:
                 master_days_store[dt] = d
             else:
-                # Existing day already has valid bars (e.g. weekend market closed);
-                # preserve rich historical intervals, update live date_bst and flag
                 existing = master_days_store[dt]
                 existing["date_bst"] = d.get("date_bst", existing.get("date_bst"))
                 existing["is_today"] = True
@@ -174,14 +184,15 @@ def merge_and_assemble_payload(raw_data: Dict[str, Any], date_query: Optional[st
         for od in all_days[1:]:
             od["is_today"] = False
 
-    raw_data["days"] = all_days
-    raw_data["total_history_days"] = len(all_days)
-    raw_data["available_days"] = extract_available_days_summary(all_days)
+    assembled = dict(raw_data)
+    assembled["days"] = all_days
+    assembled["total_history_days"] = len(all_days)
+    assembled["available_days"] = extract_available_days_summary(all_days)
 
     # Ensure market price fallback
-    if "market" not in raw_data or not raw_data["market"].get("bid"):
-        raw_data["market"] = {
-            "symbol": raw_data.get("symbol", "XAUUSDm"),
+    if "market" not in assembled or not assembled["market"] or not assembled["market"].get("bid"):
+        assembled["market"] = {
+            "symbol": assembled.get("symbol", "XAUUSDm"),
             "name": "Gold Spot / US Dollar",
             "bid": 3875.70,
             "ask": 3875.94,
@@ -202,23 +213,28 @@ def merge_and_assemble_payload(raw_data: Dict[str, Any], date_query: Optional[st
         selected_day = all_days[0] if all_days else None
 
     if selected_day:
-        raw_data["selected_date"] = selected_day.get("date")
-        raw_data["selected_day"] = selected_day
-        raw_data["summary"] = selected_day.get("summary", raw_data.get("summary", {}))
-        raw_data["intervals"] = selected_day.get("intervals", raw_data.get("intervals", []))
-        raw_data["is_viewing_history"] = not selected_day.get("is_today", False)
+        assembled["selected_date"] = selected_day.get("date")
+        assembled["selected_day"] = selected_day
+        assembled["summary"] = selected_day.get("summary", assembled.get("summary", {}))
+        assembled["intervals"] = selected_day.get("intervals", assembled.get("intervals", []))
+        assembled["is_viewing_history"] = not selected_day.get("is_today", False)
     else:
-        raw_data["selected_date"] = None
-        raw_data["is_viewing_history"] = False
+        assembled["selected_date"] = None
+        assembled["is_viewing_history"] = False
 
-    # Persist master store to disk
-    try:
-        with open(MASTER_DAYS_FILE, "w", encoding="utf-8") as f:
-            json.dump({"days": all_days, "count": len(all_days), "updated_at": time.time()}, f, indent=2)
-    except Exception as e:
-        print(f"[Public Activity Delta Server] Error saving master store: {e}")
+    # Persist master store to disk only when explicitly requested and throttled
+    global _last_disk_save
+    if save_to_disk and (time.time() - _last_disk_save >= 30.0):
+        try:
+            tmp_master = MASTER_DAYS_FILE.with_suffix(".tmp")
+            with open(tmp_master, "w", encoding="utf-8") as f:
+                json.dump({"days": all_days, "count": len(all_days), "updated_at": time.time()}, f, separators=(',', ':'))
+            tmp_master.replace(MASTER_DAYS_FILE)
+            _last_disk_save = time.time()
+        except Exception as e:
+            print(f"[Public Activity Delta Server] Error saving master store: {e}")
 
-    return raw_data
+    return assembled
 
 @app.get("/api/delta")
 async def get_delta(date: Optional[str] = Query(None, description="Optional date filter (e.g. '2026.10.29')")):
@@ -253,7 +269,7 @@ async def get_delta(date: Optional[str] = Query(None, description="Optional date
             raw_data["is_simulation"] = False
             
             # Merge with master multi-day archive so historical days are NEVER lost
-            raw_data = merge_and_assemble_payload(raw_data, date)
+            raw_data = merge_and_assemble_payload(raw_data, date, save_to_disk=False)
             
             last_known_payload = raw_data
             save_cached_payload(raw_data)
@@ -276,7 +292,7 @@ async def get_delta(date: Optional[str] = Query(None, description="Optional date
             else:
                 if "diagnostics" in cached:
                     cached["diagnostics"]["error_message"] = "MT5 offline. Serving last recorded snapshot."
-            raw_data = merge_and_assemble_payload(cached, date)
+            raw_data = merge_and_assemble_payload(cached, date, save_to_disk=False)
             return raw_data
 
     if not raw_data and MASTER_SNAPSHOT_PATH.exists():
@@ -284,7 +300,7 @@ async def get_delta(date: Optional[str] = Query(None, description="Optional date
             with open(MASTER_SNAPSHOT_PATH, "r", encoding="utf-8", errors="ignore") as f:
                 backup = json.load(f)
             backup["mt5_online"] = False
-            raw_data = merge_and_assemble_payload(backup, date)
+            raw_data = merge_and_assemble_payload(backup, date, save_to_disk=False)
             return raw_data
         except Exception:
             pass
@@ -306,7 +322,7 @@ async def sync_data_from_mt5(request: Request):
         raise HTTPException(status_code=400, detail=f"Invalid JSON: {e}")
 
     now = time.time()
-    merged = merge_and_assemble_payload(incoming_data, None)
+    merged = merge_and_assemble_payload(incoming_data, None, save_to_disk=True)
     merged["mt5_online"] = True
     merged["last_sync_time"] = now
     merged["last_sync_utc"] = datetime.now(timezone.utc).isoformat()
@@ -376,17 +392,20 @@ async def get_status():
     now = time.time()
     file_exists = DELTA_JSON_PATH.exists()
     mtime = os.path.getmtime(DELTA_JSON_PATH) if file_exists else 0
-    mt5_online = file_exists and (now - mtime <= 5.0)
+    is_local_online = file_exists and (now - mtime <= 10.0)
+    
+    last_sync = last_known_payload.get("last_sync_time", 0) if last_known_payload else 0
+    is_cloud_sync_online = (now - last_sync <= 15.0) if last_sync else False
+    
+    mt5_online = is_local_online or is_cloud_sync_online
     
     return {
         "server_status": "ONLINE",
-        "mt5_files_dir": str(MT5_FILES_DIR),
-        "delta_file_exists": file_exists,
-        "delta_file_path": str(DELTA_JSON_PATH),
         "mt5_online": mt5_online,
-        "file_mtime": mtime,
-        "seconds_since_file_update": round(now - mtime, 1) if file_exists else None,
-        "has_cached_snapshot": CACHE_FILE.exists()
+        "is_cloud_synced": is_cloud_sync_online,
+        "total_days_loaded": len(master_days_store),
+        "seconds_since_heartbeat": round(now - max(mtime, last_sync), 1) if (mtime or last_sync) else None,
+        "has_cached_snapshot": CACHE_FILE.exists() or (last_known_payload is not None)
     }
 
 # Mount static frontend directory
