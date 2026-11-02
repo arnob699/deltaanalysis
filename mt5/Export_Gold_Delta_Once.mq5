@@ -370,8 +370,8 @@ void OnStart()
    json += StringFormat("    \"day_open\": %.2f,\n", gold_open);
    json += StringFormat("    \"day_high\": %.2f,\n", gold_high);
    json += StringFormat("    \"day_low\": %.2f,\n", gold_low);
-   json += StringFormat("    \"change\": %+.2f,\n", gold_change);
-   json += StringFormat("    \"change_pct\": %+.2f\n", gold_change_pct);
+   json += StringFormat("    \"change\": %.2f,\n", gold_change);
+   json += StringFormat("    \"change_pct\": %.2f\n", gold_change_pct);
    json += "  },\n";
    
    json += "  \"diagnostics\": {\n";

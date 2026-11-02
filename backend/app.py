@@ -3,10 +3,15 @@ import sys
 import time
 import json
 import glob
+import re
 import asyncio
 from pathlib import Path
 from datetime import datetime, timezone
 from typing import Dict, Any, Optional, List
+
+def safe_load_json(text: str) -> Dict[str, Any]:
+    cleaned = re.sub(r':\s*\+(\d+(\.\d+)?)', r': \1', text)
+    return json.loads(cleaned)
 
 from fastapi import FastAPI, HTTPException, Request, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -232,7 +237,7 @@ async def get_delta(date: Optional[str] = Query(None, description="Optional date
     if DELTA_JSON_PATH.exists():
         try:
             with open(DELTA_JSON_PATH, "r", encoding="utf-8", errors="ignore") as f:
-                raw_data = json.load(f)
+                raw_data = safe_load_json(f.read())
             
             mtime = os.path.getmtime(DELTA_JSON_PATH)
             hb_epoch = raw_data.get("heartbeat_epoch", 0)

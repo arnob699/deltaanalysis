@@ -9,6 +9,7 @@ import sys
 import time
 import json
 import glob
+import re
 from pathlib import Path
 
 try:
@@ -16,6 +17,11 @@ try:
 except ImportError:
     print("[ERROR] 'requests' library not found. Run: pip install requests")
     sys.exit(1)
+
+def safe_load_json(text: str) -> dict:
+    # Remove any illegal leading plus sign on numbers (e.g. "+2.79")
+    cleaned = re.sub(r':\s*\+(\d+(\.\d+)?)', r': \1', text)
+    return json.loads(cleaned)
 
 # Configure your Render app URL: e.g. "https://your-gold-delta.onrender.com"
 RENDER_URL = os.environ.get("RENDER_URL", "").rstrip("/")
@@ -84,7 +90,7 @@ def main():
                 # Read file if modified or at least once every 10 seconds
                 if curr_mtime != last_sent_mtime or (time.time() - last_sent_mtime > 10):
                     with open(delta_file, "r", encoding="utf-8", errors="ignore") as f:
-                        payload = json.load(f)
+                        payload = safe_load_json(f.read())
 
                     payload["heartbeat_epoch"] = int(time.time())
                     payload["mt5_online"] = True
