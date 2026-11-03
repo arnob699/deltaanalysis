@@ -43,10 +43,7 @@ Write-Host "Restoring and deploying MT5 files..." -ForegroundColor Cyan
 Copy-Item (Join-Path $mt5Source "FXSSI_DailyDelta_Bridge.ex5") -Destination $dstExperts -Force
 Copy-Item (Join-Path $mt5Source "FXSSI_DailyDelta_Bridge.mq5") -Destination $dstExperts -Force
 Copy-Item (Join-Path $mt5Source "FXSSI_DailyDelta_Bridge.ex5") -Destination $dstIndicators -Force
-Copy-Item (Join-Path $mt5Source "Bangladesh_Standard_Time_Clock.mq5") -Destination $dstIndicators -Force
-Copy-Item (Join-Path $mt5Source "Bangladesh_Standard_Time_Clock.ex5") -Destination $dstIndicators -Force
 Write-Host "  [OK] Deployed FXSSI_DailyDelta_Bridge (.mq5 & .ex5) to Experts and Indicators" -ForegroundColor Green
-Write-Host "  [OK] Deployed Bangladesh_Standard_Time_Clock (.mq5 & .ex5) to Indicators" -ForegroundColor Green
 
 # 2. Copy One-Click Snapshot Script
 Copy-Item (Join-Path $mt5Source "Export_Gold_Delta_Once.ex5") -Destination $dstScripts -Force
