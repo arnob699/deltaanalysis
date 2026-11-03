@@ -19,10 +19,16 @@ input int      InpMaxHistoryDays      = 29;                                 // M
 input int      InpBstUtcOffsetHours   = 6;                                  // Bangladesh Standard Time UTC Offset (BST = UTC+6)
 
 input group "---- Export & Bridge Settings ----"
-input string   InpJsonFileName        = "fxssi_daily_delta.json";           // JSON Bridge State File Name
-input string   InpCmdFileName         = "refresh_cmd.json";                 // Web Refresh Command File Name
-input int      InpTimerSeconds        = 1;                                  // Timer Interval (Seconds)
-input bool     InpShowChartButton     = true;                               // Show On-Chart Refresh Button
+input string           InpJsonFileName        = "fxssi_daily_delta.json";           // JSON Bridge State File Name
+input string           InpCmdFileName         = "refresh_cmd.json";                 // Web Refresh Command File Name
+input int              InpTimerSeconds        = 1;                                  // Timer Interval (Seconds)
+input bool             InpShowChartButton     = true;                               // Show On-Chart Refresh Button
+
+input group "---- Bangladesh Standard Time (BST) HUD ----"
+input bool             InpShowBstClockHud     = true;                               // Show Live Bangladesh Time Clock HUD
+input ENUM_BASE_CORNER InpHudCorner           = CORNER_LEFT_UPPER;                  // HUD Screen Corner
+input int              InpHudXOffset          = 214;                                // HUD X Position (Pixels)
+input int              InpHudYOffset          = 18;                                 // HUD Y Position (Pixels)
 
 //+------------------------------------------------------------------+
 //| Structure for Day Summary                                        |
@@ -55,6 +61,13 @@ datetime g_last_m20_bar_time = 0;
 datetime g_last_day_open     = 0;
 string   g_button_name       = "BTN_REFRESH_ACTIVITY_DELTA";
 
+string   g_hud_bg            = "DELTA_HUD_BG";
+string   g_hud_title         = "DELTA_HUD_TITLE";
+string   g_hud_clock         = "DELTA_HUD_CLOCK";
+string   g_hud_date          = "DELTA_HUD_DATE";
+string   g_hud_info          = "DELTA_HUD_INFO";
+string   g_last_sentiment_summary = "Neutral Equilibrium";
+
 string   g_cached_past_days_json = "";
 int      g_cached_history_days_count = 0;
 
@@ -64,6 +77,7 @@ int      BindActivityIndicator();
 void     RecalculateAndExport(string update_type, bool full_history_refresh);
 DayData  ProcessSingleDay(int day_index, datetime now_current, int bst_offset);
 string   FormatTime12(datetime dt);
+string   FormatTime12Seconds(datetime dt);
 string   FormatDateTime12(datetime dt);
 string   GetDayOfWeekName(datetime dt);
 int      GetBstOffsetSeconds();
@@ -71,6 +85,9 @@ string   BuildBehaviorTag(double inc, double dec);
 string   DetermineContrarianBias(double inc_net, double dec_net);
 void     CreateChartButton();
 void     UpdateChartButton(string text, color bg_col);
+void     CreateChartHud();
+void     UpdateChartHud();
+void     RemoveChartHud();
 
 //+------------------------------------------------------------------+
 //| Expert initialization function                                   |
@@ -97,6 +114,10 @@ int OnInit()
    {
       CreateChartButton();
    }
+   if(InpShowBstClockHud)
+   {
+      CreateChartHud();
+   }
    
    EventSetTimer(InpTimerSeconds > 0 ? InpTimerSeconds : 1);
    RecalculateAndExport("INIT_STARTUP", true);
@@ -119,6 +140,7 @@ void OnDeinit(const int reason)
    g_hIndicator = INVALID_HANDLE;
    
    ObjectDelete(0, g_button_name);
+   RemoveChartHud();
    ChartRedraw();
    Print("[Public Activity Delta] Bridge deinitialized.");
 }
@@ -128,6 +150,11 @@ void OnDeinit(const int reason)
 //+------------------------------------------------------------------+
 void OnTick()
 {
+   if(InpShowBstClockHud)
+   {
+      UpdateChartHud();
+   }
+   
    datetime current_time = iTime(g_gold_symbol, _Period, 0);
    if(current_time != 0 && current_time != g_last_m20_bar_time)
    {
@@ -141,6 +168,12 @@ void OnTick()
 //+------------------------------------------------------------------+
 void OnTimer()
 {
+   // Always refresh live on-chart Bangladesh Clock HUD every second
+   if(InpShowBstClockHud)
+   {
+      UpdateChartHud();
+   }
+
    // 1. Check for Web Refresh Command
    if(FileIsExist(InpCmdFileName))
    {
@@ -285,8 +318,15 @@ int BindActivityIndicator()
 //+------------------------------------------------------------------+
 int GetBstOffsetSeconds()
 {
-   datetime loc = TimeLocal();
+   datetime gmt = TimeGMT();
    datetime cur = TimeCurrent();
+   if(gmt > 0 && cur > 0)
+   {
+      int broker_utc_offset = (int)(cur - gmt);
+      // BST is UTC + (InpBstUtcOffsetHours * 3600)
+      return (InpBstUtcOffsetHours * 3600) - broker_utc_offset;
+   }
+   datetime loc = TimeLocal();
    int diff = (int)(loc - cur);
    int rounded = (int)MathRound((double)diff / 1800.0) * 1800;
    if(rounded == 0) rounded = InpBstUtcOffsetHours * 3600; // Fallback to UTC+6
@@ -306,6 +346,22 @@ string FormatTime12(datetime dt)
    int h12 = h % 12;
    if(h12 == 0) h12 = 12;
    return StringFormat("%02d:%02d %s", h12, m, ampm);
+}
+
+//+------------------------------------------------------------------+
+//| Format 12-Hour Time with Seconds "hh:mm:ss AM/PM"                |
+//+------------------------------------------------------------------+
+string FormatTime12Seconds(datetime dt)
+{
+   MqlDateTime mdt;
+   TimeToStruct(dt, mdt);
+   int h = mdt.hour;
+   int m = mdt.min;
+   int s = mdt.sec;
+   string ampm = (h >= 12) ? "PM" : "AM";
+   int h12 = h % 12;
+   if(h12 == 0) h12 = 12;
+   return StringFormat("%02d:%02d:%02d %s", h12, m, s, ampm);
 }
 
 //+------------------------------------------------------------------+
@@ -495,7 +551,8 @@ void RecalculateAndExport(string update_type, bool full_history_refresh)
 {
    datetime now_local   = TimeLocal();
    datetime now_current = TimeCurrent();
-   long heartbeat_epoch = (long)now_local;
+   datetime now_gmt     = TimeGMT();
+   long heartbeat_epoch = (now_gmt > 0) ? (long)now_gmt : (long)now_local;
    int  bst_offset_sec  = GetBstOffsetSeconds();
    
    datetime now_bst     = now_current + bst_offset_sec;
@@ -530,6 +587,7 @@ void RecalculateAndExport(string update_type, bool full_history_refresh)
    
    // 1. Process Day 0 (Today / Active Day)
    DayData today_data = ProcessSingleDay(0, now_current, bst_offset_sec);
+   g_last_sentiment_summary = StringFormat("%s (%+.2f%% Net)", today_data.contrarian_bias, today_data.inc_net);
    
    if(dlls_allowed && indicator_found)
    {
@@ -803,4 +861,123 @@ void UpdateChartButton(string text, color bg_col)
    ObjectSetString(0, g_button_name, OBJPROP_TEXT, text);
    ObjectSetInteger(0, g_button_name, OBJPROP_BGCOLOR, bg_col);
    ChartRedraw();
+}
+
+//+------------------------------------------------------------------+
+//| Create On-Chart Bangladesh Standard Time (BST) Clock HUD         |
+//+------------------------------------------------------------------+
+void CreateChartHud()
+{
+   RemoveChartHud();
+
+   int x = InpHudXOffset;
+   int y = InpHudYOffset;
+
+   // 1. Semi-transparent institutional container box
+   ObjectCreate(0, g_hud_bg, OBJ_RECTANGLE_LABEL, 0, 0, 0);
+   ObjectSetInteger(0, g_hud_bg, OBJPROP_CORNER, InpHudCorner);
+   ObjectSetInteger(0, g_hud_bg, OBJPROP_XDISTANCE, x);
+   ObjectSetInteger(0, g_hud_bg, OBJPROP_YDISTANCE, y);
+   ObjectSetInteger(0, g_hud_bg, OBJPROP_XSIZE, 350);
+   ObjectSetInteger(0, g_hud_bg, OBJPROP_YSIZE, 82);
+   ObjectSetInteger(0, g_hud_bg, OBJPROP_BGCOLOR, C'16,23,36');
+   ObjectSetInteger(0, g_hud_bg, OBJPROP_BORDER_COLOR, C'42,58,84');
+   ObjectSetInteger(0, g_hud_bg, OBJPROP_BORDER_TYPE, BORDER_FLAT);
+   ObjectSetInteger(0, g_hud_bg, OBJPROP_SELECTABLE, false);
+
+   // 2. Title Label (Gold)
+   ObjectCreate(0, g_hud_title, OBJ_LABEL, 0, 0, 0);
+   ObjectSetInteger(0, g_hud_title, OBJPROP_CORNER, InpHudCorner);
+   ObjectSetInteger(0, g_hud_title, OBJPROP_XDISTANCE, x + 12);
+   ObjectSetInteger(0, g_hud_title, OBJPROP_YDISTANCE, y + 8);
+   ObjectSetString(0, g_hud_title, OBJPROP_TEXT, "BANGLADESH TIME (BST, UTC+6)");
+   ObjectSetString(0, g_hud_title, OBJPROP_FONT, "Segoe UI Semibold");
+   ObjectSetInteger(0, g_hud_title, OBJPROP_FONTSIZE, 8);
+   ObjectSetInteger(0, g_hud_title, OBJPROP_COLOR, C'245,185,25');
+   ObjectSetInteger(0, g_hud_title, OBJPROP_SELECTABLE, false);
+
+   // 3. Live 12-Hour BST Clock (Bold White)
+   ObjectCreate(0, g_hud_clock, OBJ_LABEL, 0, 0, 0);
+   ObjectSetInteger(0, g_hud_clock, OBJPROP_CORNER, InpHudCorner);
+   ObjectSetInteger(0, g_hud_clock, OBJPROP_XDISTANCE, x + 12);
+   ObjectSetInteger(0, g_hud_clock, OBJPROP_YDISTANCE, y + 23);
+   ObjectSetString(0, g_hud_clock, OBJPROP_TEXT, "--:--:-- --");
+   ObjectSetString(0, g_hud_clock, OBJPROP_FONT, "Segoe UI Bold");
+   ObjectSetInteger(0, g_hud_clock, OBJPROP_FONTSIZE, 13);
+   ObjectSetInteger(0, g_hud_clock, OBJPROP_COLOR, clrWhite);
+   ObjectSetInteger(0, g_hud_clock, OBJPROP_SELECTABLE, false);
+
+   // 4. Date Label
+   ObjectCreate(0, g_hud_date, OBJ_LABEL, 0, 0, 0);
+   ObjectSetInteger(0, g_hud_date, OBJPROP_CORNER, InpHudCorner);
+   ObjectSetInteger(0, g_hud_date, OBJPROP_XDISTANCE, x + 160);
+   ObjectSetInteger(0, g_hud_date, OBJPROP_YDISTANCE, y + 27);
+   ObjectSetString(0, g_hud_date, OBJPROP_TEXT, "Loading date...");
+   ObjectSetString(0, g_hud_date, OBJPROP_FONT, "Segoe UI");
+   ObjectSetInteger(0, g_hud_date, OBJPROP_FONTSIZE, 9);
+   ObjectSetInteger(0, g_hud_date, OBJPROP_COLOR, C'165,190,220');
+   ObjectSetInteger(0, g_hud_date, OBJPROP_SELECTABLE, false);
+
+   // 5. Status Line (Broker Time, Bar Closes In, Flow)
+   ObjectCreate(0, g_hud_info, OBJ_LABEL, 0, 0, 0);
+   ObjectSetInteger(0, g_hud_info, OBJPROP_CORNER, InpHudCorner);
+   ObjectSetInteger(0, g_hud_info, OBJPROP_XDISTANCE, x + 12);
+   ObjectSetInteger(0, g_hud_info, OBJPROP_YDISTANCE, y + 55);
+   ObjectSetString(0, g_hud_info, OBJPROP_TEXT, "Synchronizing chart stream...");
+   ObjectSetString(0, g_hud_info, OBJPROP_FONT, "Segoe UI");
+   ObjectSetInteger(0, g_hud_info, OBJPROP_FONTSIZE, 8);
+   ObjectSetInteger(0, g_hud_info, OBJPROP_COLOR, C'46,204,113');
+   ObjectSetInteger(0, g_hud_info, OBJPROP_SELECTABLE, false);
+
+   UpdateChartHud();
+}
+
+//+------------------------------------------------------------------+
+//| Update On-Chart BST Clock HUD                                    |
+//+------------------------------------------------------------------+
+void UpdateChartHud()
+{
+   if(!InpShowBstClockHud) return;
+
+   int bst_offset = GetBstOffsetSeconds();
+   datetime cur = TimeCurrent();
+   datetime now_bst = cur + bst_offset;
+
+   // 1. Clock string
+   string clock_str = FormatTime12Seconds(now_bst);
+   ObjectSetString(0, g_hud_clock, OBJPROP_TEXT, clock_str);
+
+   // 2. Date string
+   string day_str = GetDayOfWeekName(now_bst);
+   string date_str = TimeToString(now_bst, TIME_DATE);
+   ObjectSetString(0, g_hud_date, OBJPROP_TEXT, day_str + " | " + date_str);
+
+   // 3. Candle Countdown
+   int bar_sec = PeriodSeconds(_Period);
+   datetime bar_open = iTime(g_gold_symbol, _Period, 0);
+   int sec_elapsed = (int)(cur - bar_open);
+   int sec_left = (bar_sec > sec_elapsed) ? (bar_sec - sec_elapsed) : 0;
+   string cd_str = StringFormat("%02dm %02ds", sec_left / 60, sec_left % 60);
+
+   // 4. Broker time
+   string broker_hm = TimeToString(cur, TIME_SECONDS);
+
+   // 5. Formatted Info string
+   string info_str = StringFormat("Broker: %s  |  Bar Closes: %s  |  %s", 
+                                  broker_hm, cd_str, g_last_sentiment_summary);
+   ObjectSetString(0, g_hud_info, OBJPROP_TEXT, info_str);
+
+   ChartRedraw();
+}
+
+//+------------------------------------------------------------------+
+//| Remove On-Chart BST Clock HUD                                    |
+//+------------------------------------------------------------------+
+void RemoveChartHud()
+{
+   ObjectDelete(0, g_hud_bg);
+   ObjectDelete(0, g_hud_title);
+   ObjectDelete(0, g_hud_clock);
+   ObjectDelete(0, g_hud_date);
+   ObjectDelete(0, g_hud_info);
 }

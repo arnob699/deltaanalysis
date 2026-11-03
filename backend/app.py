@@ -258,13 +258,14 @@ async def get_delta(date: Optional[str] = Query(None, description="Optional date
             mtime = os.path.getmtime(DELTA_JSON_PATH)
             hb_epoch = raw_data.get("heartbeat_epoch", 0)
             
-            # Consider MT5 online if updated within last 10 seconds
-            is_recent_heartbeat = abs(now - hb_epoch) <= 10.0
-            is_recent_mtime = (now - mtime) <= 10.0
+            # Consider MT5 online if updated within last 15 seconds
+            sec_hb = abs(now - hb_epoch)
+            is_recent_heartbeat = sec_hb <= 15.0
+            is_recent_mtime = (now - mtime) <= 15.0
             mt5_online = is_recent_heartbeat or is_recent_mtime
             
             raw_data["mt5_online"] = mt5_online
-            raw_data["seconds_since_heartbeat"] = round(abs(now - hb_epoch), 1)
+            raw_data["seconds_since_heartbeat"] = round(sec_hb if sec_hb < 3600 else (now - mtime), 1)
             raw_data["file_age_seconds"] = round(now - mtime, 1)
             raw_data["is_simulation"] = False
             

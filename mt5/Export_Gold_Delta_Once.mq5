@@ -30,8 +30,14 @@ struct DayData
 
 int GetBstOffsetSeconds()
 {
-   datetime loc = TimeLocal();
+   datetime gmt = TimeGMT();
    datetime cur = TimeCurrent();
+   if(gmt > 0 && cur > 0)
+   {
+      int broker_utc_offset = (int)(cur - gmt);
+      return (InpBstUtcOffsetHours * 3600) - broker_utc_offset;
+   }
+   datetime loc = TimeLocal();
    int diff = (int)(loc - cur);
    int rounded = (int)MathRound((double)diff / 1800.0) * 1800;
    if(rounded == 0) rounded = InpBstUtcOffsetHours * 3600;
