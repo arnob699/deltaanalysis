@@ -22,7 +22,6 @@ input int              InpMaxStopLossPips     = 200;                // Max Stop 
 input int              InpTakeProfitPips      = 300;                // Take Profit in Pips (300 pips)
 input double           InpPipSizeOverride     = 0.0;                // Custom Pip Size (0.0 = Auto-Detect: 0.10 Gold, 0.0001 FX)
 input int              InpSlcMarginPoints     = 30;                 // Margin Beyond MVP/SLC (Points)
-input int              InpMvpZoneFluctuateHrs = 5;                  // MVP Exit Fluctuation Range (4-7 hours)
 
 input group "---- [3] Chart Visuals & Export ----"
 input bool             InpPlotTradesOnChart   = true;               // Draw Trade Arrows & Labels on Chart
@@ -297,28 +296,16 @@ void OnStart()
             exit_reason = "SL_HIT";
             exit_price  = active_trade.sl;
          }
-         // Check TP
+         // Check TP (300 Pips Target)
          else if(active_trade.type == "BUY" && h >= active_trade.tp)
          {
-            exit_reason = "TP_HIT (MVP Reached)";
+            exit_reason = "TP_HIT (300 Pips)";
             exit_price  = active_trade.tp;
          }
          else if(active_trade.type == "SELL" && l <= active_trade.tp)
          {
-            exit_reason = "TP_HIT (MVP Reached)";
+            exit_reason = "TP_HIT (300 Pips)";
             exit_price  = active_trade.tp;
-         }
-         // Check MVP Zone Fluctuation (Rule 4: within MVP zone 4-7 hours)
-         else if(active_trade.bars_held >= (InpMvpZoneFluctuateHrs * 2) && MathAbs(c - mvp) <= (2.0))
-         {
-            exit_reason = "MVP_ZONE_EXIT";
-            exit_price  = c;
-         }
-         // Timeout Exit (24 bars = 12h)
-         else if(active_trade.bars_held >= 24)
-         {
-            exit_reason = "TIMEOUT";
-            exit_price  = c;
          }
 
          if(exit_reason != "")

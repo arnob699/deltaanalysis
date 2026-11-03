@@ -35,7 +35,6 @@ input int              InpMaxStopLossPips     = 200;                // Max Stop 
 input int              InpTakeProfitPips      = 300;                // Take Profit in Pips (300 pips)
 input double           InpPipSizeOverride     = 0.0;                // Pip Size Override (0.0 = Auto: 0.10 Gold, 0.0001 FX)
 input int              InpSlcMarginPoints     = 30;                 // Margin Beyond MVP/SLC (Points)
-input int              InpMvpFluctuateHours   = 5;                  // MVP Exit Fluctuation Range (4-7 hours)
 
 input group "---- [2] Indicator Binding / Fallback Paths ----"
 input string           InpDerivativesPath     = "FXSSI.com\\FXSSI.Derivatives";      // FXSSI Derivatives Path (MVP)

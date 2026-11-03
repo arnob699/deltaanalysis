@@ -239,15 +239,7 @@ def run_backtest(df,
                 exit_reason = 'TP_HIT (300 Pips Target)'
                 exit_price = tp
 
-            # Check MVP Zone Fluctuation Exit (Rule 4: within MVP zone 4-7 hours = 8-14 M30 bars)
-            elif bars_held >= 10 and abs(c - mvp) <= 1.50:
-                exit_reason = f'MVP_ZONE_EXIT ({bars_held*0.5:.1f}h in zone)'
-                exit_price = c
-
-            # Max timeout exit (24 hours / 48 bars)
-            elif bars_held >= max_hold_bars:
-                exit_reason = 'TIMEOUT_EXIT'
-                exit_price = c
+            # Pure Binary Exit: No timeout exits and no partial profit exits (ride until TP or SL)
 
             if exit_reason is not None:
                 # Finalize trade
@@ -432,7 +424,7 @@ def analyze_performance(trades, initial_balance=10000.0):
     exit_reasons = {}
     for t in trades:
         r = t['exit_reason']
-        key = 'TP Hit (300 Pips)' if 'TP_HIT' in r else ('SL Hit (Max 200 Pips / MVP)' if 'SL_HIT' in r else ('MVP Zone Exit' if 'MVP_ZONE' in r else 'Timeout'))
+        key = 'TP Hit (300 Pips Target)' if 'TP_HIT' in r else ('SL Hit (Max 200 Pips / MVP)' if 'SL_HIT' in r else 'Still Open (End of Period)')
         exit_reasons[key] = exit_reasons.get(key, 0) + 1
 
     buy_trades = [t for t in trades if t['type'] == 'BUY']
