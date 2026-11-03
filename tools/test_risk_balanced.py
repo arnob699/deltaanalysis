@@ -108,3 +108,4 @@ for target in [12.0, 15.0, 20.0, 25.0]:
         t = test_dynamic_rr(target_pts=target, max_risk_ratio=risk_r)
         s = analyze_performance(t)
         print(f"Target: {target:4.1f} | MaxRiskRatio: {risk_r:4.2f} | Win%: {s['win_rate_pct']:5.1f}% | PF: {s['profit_factor']:4.2f} | Net USD: ${s['net_profit_usd']:8.2f} | MaxDD: {s['max_drawdown_pct']:4.1f}% | Trades: {s['total_trades']}")
+

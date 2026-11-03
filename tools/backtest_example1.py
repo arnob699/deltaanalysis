@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 """
 Backtest Engine for FXSSI Strategy Example #1 (MVP + Ratios + SLC)
-Evaluates performance on XAUUSDm (Gold) over the last 1 month (Oct 1 - Nov 3, 2026).
+Evaluates performance on XAUUSDm (Gold) over the last 1 month (Oct 1 - Nov 4, 2026).
+Enforces:
+- Stop Loss: Max 200 pips AND strictly above MVP line (for SELL) / below MVP line (for BUY).
+- Take Profit: 300 pips from entry.
 """
 
 import os
@@ -28,7 +31,7 @@ def load_market_data(symbol="XAUUSDm", timeframe=None, start_date=None, end_date
     if start_date is None:
         start_date = datetime(2026, 10, 1, 0, 0, tzinfo=timezone.utc)
     if end_date is None:
-        end_date = datetime(2026, 11, 4, 0, 0, tzinfo=timezone.utc)
+        end_date = datetime(2026, 11, 4, 23, 59, tzinfo=timezone.utc)
 
     candles = []
     if MT5_AVAILABLE and mt5.initialize():
@@ -52,7 +55,7 @@ def load_market_data(symbol="XAUUSDm", timeframe=None, start_date=None, end_date
                     })
             print(f"[Data] Loaded {len(candles)} M30 bars from MT5 between {start_date.date()} and {end_date.date()}.")
 
-    # Load Sentiment Data from cached_delta.json and master_days_store.json
+    # Load Sentiment Data from cached_delta.json
     delta_cache_path = os.path.join(os.path.dirname(__file__), "..", "backend", "data", "cached_delta.json")
     if not os.path.exists(delta_cache_path):
         delta_cache_path = os.path.join("backend", "data", "cached_delta.json")
@@ -66,13 +69,11 @@ def load_market_data(symbol="XAUUSDm", timeframe=None, start_date=None, end_date
                 for intv in day.get("intervals", []):
                     ts_b = intv.get("timestamp_broker")
                     if ts_b:
-                        # Format: "2026.11.03 00:00:00"
                         key = ts_b[:16].replace(".", "-") # "2026-11-03 00:00"
                         inc = intv.get("inc_running_net", 0.0)
                         dec = intv.get("dec_running_net", 0.0)
                         net_d = inc + dec
                         # Compute sentiment ratio (% Longs)
-                        # Formula: 50.0 + (net_delta * 2.5) clamped to [10, 90]
                         ratio = 50.0 + (net_d * 2.5)
                         ratio = max(10.0, min(90.0, ratio))
                         sentiment_lookup[key] = {
@@ -95,12 +96,10 @@ def load_market_data(symbol="XAUUSDm", timeframe=None, start_date=None, end_date
 
     for idx, row in df.iterrows():
         t_key = row['time_str']
-        # Find exact or nearest preceding interval
         if t_key in sentiment_lookup:
             last_ratio = sentiment_lookup[t_key]['ratio']
             last_tag = sentiment_lookup[t_key]['tag']
         else:
-            # Check within +/- 20 mins
             dt = row['timestamp']
             found = False
             for offset in [0, -10, 10, -20, 20]:
@@ -110,9 +109,6 @@ def load_market_data(symbol="XAUUSDm", timeframe=None, start_date=None, end_date
                     last_tag = sentiment_lookup[check_key]['tag']
                     found = True
                     break
-            if not found:
-                # Retain last known ratio
-                pass
         ratios.append(last_ratio)
         tags.append(last_tag)
 
@@ -122,17 +118,14 @@ def load_market_data(symbol="XAUUSDm", timeframe=None, start_date=None, end_date
     return df
 
 
-def calculate_indicators(df, slc_lookback=20, slc_buffer_pts=3.0):
+def calculate_indicators(df, slc_lookback=20):
     """
-    Calculate MVP (Session VWAP / Volume-Weighted Equilibrium)
+    Calculate MVP (Session Volume-Weighted Middle Price)
     and SLC (Upper/Lower Stop Loss Clusters).
-    On Gold XAUUSDm:
-      slc_buffer_pts: $3.00 (30 pips / 3000 points) margin beyond swing cluster.
     """
     df = df.copy()
     
     # 1. MVP: Session Volume-Weighted Average Price
-    # Matches FXSSI.Derivatives buffer 2 session volume middle
     mvp_values = []
     current_day = None
     sum_pv = 0.0
@@ -156,12 +149,9 @@ def calculate_indicators(df, slc_lookback=20, slc_buffer_pts=3.0):
     df['mvp'] = mvp_values
 
     # 2. SLC: Stop Loss Clusters
-    # Upper SLC = 20-bar Highest High + 1.0 point
-    # Lower SLC = 20-bar Lowest Low - 1.0 point
-    df['upper_slc'] = df['high'].rolling(slc_lookback).max().shift(1) + 1.0
-    df['lower_slc'] = df['low'].rolling(slc_lookback).min().shift(1) - 1.0
+    df['upper_slc'] = df['high'].rolling(slc_lookback).max().shift(1) + 0.30
+    df['lower_slc'] = df['low'].rolling(slc_lookback).min().shift(1) - 0.30
 
-    # Fill initial NaNs with close
     df['upper_slc'] = df['upper_slc'].fillna(df['high'] + 5.0)
     df['lower_slc'] = df['lower_slc'].fillna(df['low'] - 5.0)
 
@@ -171,21 +161,25 @@ def calculate_indicators(df, slc_lookback=20, slc_buffer_pts=3.0):
 def run_backtest(df, 
                  ratios_sell_thresh=60.0, 
                  ratios_buy_thresh=40.0, 
-                 slc_margin=3.0, 
-                 tp_margin=0.5,
-                 max_hold_bars=24,
+                 max_sl_pips=200,
+                 tp_pips=300,
+                 pip_value=0.10,
+                 slc_margin=0.30,
+                 max_hold_bars=48,
                  account_balance=10000.0,
                  lot_size=0.10):
     """
-    Simulate Example #1 Rules:
-    - Sell Setup: Price < MVP AND Ratios >= 60%
-    - Buy Setup: Price > MVP AND Ratios <= 40%
-    - Stop Loss: SLC + margin (20-40 points beyond cluster)
-    - Take Profit: Target MVP level (mean reversion)
-    - Exit rule: Price touches MVP, or stays in MVP zone 4-7 hours (8-14 bars), or hits SL.
+    Simulate Example #1 Rules with User Specifics:
+    - Stop Loss: Max 200 pips AND strictly above MVP line (for SELL) / below MVP line (for BUY).
+    - Take Profit: Exactly 300 pips from entry.
+    - Setup: Sell when Price < MVP & Ratios >= 60%; Buy when Price > MVP & Ratios <= 40%.
+    - Exit rules: TP hit (300 pips), SL hit (max 200 pips above MVP), MVP zone timeout (4-7h).
     """
     trades = []
     active_trade = None
+
+    sl_dist = max_sl_pips * pip_value  # 200 pips = $20.00 on Gold
+    tp_dist = tp_pips * pip_value      # 300 pips = $30.00 on Gold
 
     # Track signals bar by bar
     for i in range(1, len(df)):
@@ -229,30 +223,28 @@ def run_backtest(df,
             exit_reason = None
             exit_price = None
 
-            # Check SL Hit
+            # Check SL Hit (Above MVP, Max 200 pips)
             if pos_type == 'BUY' and l <= sl:
-                exit_reason = 'SL_HIT'
+                exit_reason = 'SL_HIT (Max 200 Pips / Below MVP)'
                 exit_price = sl
             elif pos_type == 'SELL' and h >= sl:
-                exit_reason = 'SL_HIT'
+                exit_reason = 'SL_HIT (Max 200 Pips / Above MVP)'
                 exit_price = sl
 
-            # Check TP (MVP Level Hit)
+            # Check TP (300 Pips Target)
             elif pos_type == 'BUY' and h >= tp:
-                exit_reason = 'TP_HIT (MVP Reached)'
+                exit_reason = 'TP_HIT (300 Pips Target)'
                 exit_price = tp
             elif pos_type == 'SELL' and l <= tp:
-                exit_reason = 'TP_HIT (MVP Reached)'
+                exit_reason = 'TP_HIT (300 Pips Target)'
                 exit_price = tp
 
             # Check MVP Zone Fluctuation Exit (Rule 4: within MVP zone 4-7 hours = 8-14 M30 bars)
-            elif bars_held >= 8:
-                # If price is within $1.50 of MVP line
-                if abs(c - mvp) <= 1.50:
-                    exit_reason = f'MVP_ZONE_EXIT ({bars_held*0.5:.1f}h in zone)'
-                    exit_price = c
+            elif bars_held >= 10 and abs(c - mvp) <= 1.50:
+                exit_reason = f'MVP_ZONE_EXIT ({bars_held*0.5:.1f}h in zone)'
+                exit_price = c
 
-            # Max timeout exit (12 hours / 24 bars)
+            # Max timeout exit (24 hours / 48 bars)
             elif bars_held >= max_hold_bars:
                 exit_reason = 'TIMEOUT_EXIT'
                 exit_price = c
@@ -268,7 +260,6 @@ def run_backtest(df,
                 else:
                     pnl_pts = entry_p - exit_price
 
-                # For Gold XAUUSDm: 1 point ($1.00 move) with 0.10 lot = $10.00
                 dollar_pnl = pnl_pts * 100.0 * lot_size
                 active_trade['pnl_pts'] = round(pnl_pts, 3)
                 active_trade['pnl_usd'] = round(dollar_pnl, 2)
@@ -283,46 +274,51 @@ def run_backtest(df,
         # -------------------------------------------------------------
         # 2. Check Fresh Signal if no trade active
         # -------------------------------------------------------------
-        if active_trade is None:
-            # Previous bar signal check to avoid lookahead bias
-            # Rule 1: MVP Trend
-            # Rule 2: Ratios Contrarian Threshold
+        if active_trade is None and i < len(df) - 1:
             prev_c = prev_row['close']
             prev_mvp = prev_row['mvp']
-            prev_ratios = prev_row['ratios']
+            prev_r = prev_row['ratios']
 
-            signal = None
-            # SELL Setup: Price < MVP AND Ratios >= 60%
-            if prev_c < prev_mvp and prev_ratios >= ratios_sell_thresh:
-                signal = 'SELL'
-            # BUY Setup: Price > MVP AND Ratios <= 40%
-            elif prev_c > prev_mvp and prev_ratios <= ratios_buy_thresh:
-                signal = 'BUY'
+            curr_c = curr_row['close']
+            curr_mvp = curr_row['mvp']
+            curr_r = curr_row['ratios']
 
-            if signal is not None:
-                # Calculate SL and TP based on setup
-                entry_price = o # enter at Open of current candle
+            prev_is_sell = (prev_c < prev_mvp and prev_r >= ratios_sell_thresh)
+            curr_is_sell = (curr_c < curr_mvp and curr_r >= ratios_sell_thresh)
 
-                if signal == 'SELL':
-                    # Stop loss with margin beyond upper SLC
-                    sl_level = upper_slc + slc_margin
-                    # Target is MVP (mean reversion)
-                    tp_level = mvp + tp_margin
-                    # Validate logical SL/TP
-                    if sl_level <= entry_price:
-                        sl_level = entry_price + 5.0
-                    if tp_level >= entry_price:
-                        tp_level = entry_price - 5.0
+            prev_is_buy = (prev_c > prev_mvp and prev_r <= ratios_buy_thresh)
+            curr_is_buy = (curr_c > curr_mvp and curr_r <= ratios_buy_thresh)
+
+            fresh_sell = curr_is_sell and not prev_is_sell
+            fresh_buy  = curr_is_buy and not prev_is_buy
+
+            if fresh_sell or fresh_buy:
+                next_bar = df.iloc[i+1]
+                entry_price = next_bar['open']
+                curr_time_entry = next_bar['timestamp']
+
+                if fresh_sell:
+                    signal = 'SELL'
+                    # SL must be strictly above MVP line, capped at max 200 pips
+                    base_sl = max(curr_mvp + slc_margin, upper_slc + slc_margin)
+                    if base_sl <= curr_mvp:
+                        base_sl = curr_mvp + slc_margin
+                    if (base_sl - entry_price) > sl_dist:
+                        base_sl = entry_price + sl_dist
+
+                    sl_level = base_sl
+                    tp_level = entry_price - tp_dist
                 else:
-                    # Stop loss with margin beyond lower SLC
-                    sl_level = lower_slc - slc_margin
-                    # Target is MVP (mean reversion)
-                    tp_level = mvp - tp_margin
-                    # Validate logical SL/TP
-                    if sl_level >= entry_price:
-                        sl_level = entry_price - 5.0
-                    if tp_level <= entry_price:
-                        tp_level = entry_price + 5.0
+                    signal = 'BUY'
+                    # SL must be strictly below MVP line, capped at max 200 pips
+                    base_sl = min(curr_mvp - slc_margin, lower_slc - slc_margin)
+                    if base_sl >= curr_mvp:
+                        base_sl = curr_mvp - slc_margin
+                    if (entry_price - base_sl) > sl_dist:
+                        base_sl = entry_price - sl_dist
+
+                    sl_level = base_sl
+                    tp_level = entry_price + tp_dist
 
                 risk_pts = abs(entry_price - sl_level)
                 reward_pts = abs(tp_level - entry_price)
@@ -331,13 +327,13 @@ def run_backtest(df,
                 active_trade = {
                     'trade_id': len(trades) + 1,
                     'type': signal,
-                    'entry_time': curr_time,
-                    'entry_time_str': curr_time.strftime('%Y-%m-%d %H:%M'),
-                    'entry_price': entry_price,
+                    'entry_time': curr_time_entry,
+                    'entry_time_str': curr_time_entry.strftime('%Y-%m-%d %H:%M'),
+                    'entry_price': round(entry_price, 3),
                     'sl': round(sl_level, 3),
                     'tp': round(tp_level, 3),
-                    'mvp_at_entry': round(mvp, 3),
-                    'ratios_at_entry': round(ratios, 1),
+                    'mvp_at_entry': round(curr_mvp, 3),
+                    'ratios_at_entry': round(curr_r, 1),
                     'risk_pts': round(risk_pts, 2),
                     'reward_pts': round(reward_pts, 2),
                     'rr_ratio': rr,
@@ -377,7 +373,6 @@ def analyze_performance(trades, initial_balance=10000.0):
     total_trades = len(trades)
     winning_trades = [t for t in trades if t['pnl_usd'] > 0]
     losing_trades = [t for t in trades if t['pnl_usd'] < 0]
-    scratch_trades = [t for t in trades if t['pnl_usd'] == 0]
 
     win_count = len(winning_trades)
     loss_count = len(losing_trades)
@@ -393,7 +388,6 @@ def analyze_performance(trades, initial_balance=10000.0):
     win_loss_payoff = (avg_win / avg_loss) if avg_loss > 0 else 0.0
     expectancy = (net_profit / total_trades) if total_trades > 0 else 0.0
 
-    # Drawdown and Equity Curve
     balance = initial_balance
     peak_balance = initial_balance
     max_dd_usd = 0.0
@@ -438,11 +432,9 @@ def analyze_performance(trades, initial_balance=10000.0):
     exit_reasons = {}
     for t in trades:
         r = t['exit_reason']
-        # normalize
-        key = 'TP Hit' if 'TP_HIT' in r else ('SL Hit' if 'SL_HIT' in r else ('MVP Zone Exit' if 'MVP_ZONE' in r else 'Timeout'))
+        key = 'TP Hit (300 Pips)' if 'TP_HIT' in r else ('SL Hit (Max 200 Pips / MVP)' if 'SL_HIT' in r else ('MVP Zone Exit' if 'MVP_ZONE' in r else 'Timeout'))
         exit_reasons[key] = exit_reasons.get(key, 0) + 1
 
-    # Direction breakdown
     buy_trades = [t for t in trades if t['type'] == 'BUY']
     sell_trades = [t for t in trades if t['type'] == 'SELL']
 
@@ -450,7 +442,7 @@ def analyze_performance(trades, initial_balance=10000.0):
     sell_wins = len([t for t in sell_trades if t['pnl_usd'] > 0])
 
     avg_bars_held = sum(t['bars_held'] for t in trades) / total_trades if total_trades > 0 else 0.0
-    avg_hours_held = avg_bars_held * 0.5 # M30 = 0.5 hours
+    avg_hours_held = avg_bars_held * 0.5
 
     total_pts = sum(t['pnl_pts'] for t in trades)
 
@@ -486,31 +478,33 @@ def analyze_performance(trades, initial_balance=10000.0):
 
 
 def main():
-    print("="*70)
+    print("="*75)
     print("   FXSSI STRATEGY EXAMPLE #1 - 1-MONTH INSTITUTIONAL BACKTEST")
-    print("   Pair: XAUUSDm (Gold)  |  Timeframe: PERIOD_M30  |  Period: Oct 1 - Nov 3, 2026")
-    print("="*70)
+    print("   Pair: XAUUSDm (Gold)  |  Timeframe: PERIOD_M30")
+    print("   Rules: Stop Loss Max 200 Pips (Above MVP)  |  Take Profit 300 Pips")
+    print("="*75)
 
     df = load_market_data(symbol="XAUUSDm")
-    df = calculate_indicators(df, slc_lookback=20, slc_buffer_pts=3.0)
+    df = calculate_indicators(df, slc_lookback=20)
 
-    # Run Backtest with 0.10 lot size
     trades = run_backtest(df, 
                           ratios_sell_thresh=60.0, 
                           ratios_buy_thresh=40.0, 
-                          slc_margin=3.0, 
-                          tp_margin=0.5,
-                          max_hold_bars=24,
+                          max_sl_pips=200,
+                          tp_pips=300,
+                          pip_value=0.10,
+                          slc_margin=0.30,
+                          max_hold_bars=48,
                           account_balance=10000.0,
                           lot_size=0.10)
 
     stats = analyze_performance(trades, initial_balance=10000.0)
 
     # Print Summary Report
-    print("\n" + "="*50)
+    print("\n" + "="*55)
     print("        1-MONTH BACKTEST EXECUTIVE SUMMARY")
-    print("="*50)
-    print(f"Total Period:            Oct 1, 2026 -> Nov 3, 2026 (1 Month)")
+    print("="*55)
+    print(f"Total Period:            Oct 1, 2026 -> Nov 4, 2026 (1 Month)")
     print(f"Total M30 Bars Scanned:  {len(df)}")
     print(f"Total Completed Trades:  {stats['total_trades']}")
     print(f"Winning Trades:          {stats['winning_trades']} ({stats['win_rate_pct']}%)")
@@ -530,7 +524,7 @@ def main():
     print(f"Buy Setups:              {stats['buy_trades_count']} trades ({stats['buy_win_rate_pct']}% win rate)")
     print(f"Sell Setups:             {stats['sell_trades_count']} trades ({stats['sell_win_rate_pct']}% win rate)")
     print(f"Exit Breakdown:          {stats['exit_reasons']}")
-    print("="*50)
+    print("="*55)
 
     # Save to JSON and CSV
     os.makedirs("reports", exist_ok=True)
@@ -542,7 +536,6 @@ def main():
 
     trades_df = pd.DataFrame(trades)
     if not trades_df.empty:
-        # Convert timestamp to string
         trades_df['entry_time'] = trades_df['entry_time'].astype(str)
         trades_df['exit_time'] = trades_df['exit_time'].astype(str)
         trades_df.to_csv(trades_file, index=False)

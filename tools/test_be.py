@@ -103,3 +103,4 @@ for be in [4.0, 6.0, 8.0, 10.0, 12.0]:
         t = test_breakeven_strategy(be_trigger=be, tp_target=tp)
         s = analyze_performance(t)
         print(f"BE: {be:4.1f} | TP: {tp:4.1f} | Win%: {s['win_rate_pct']:5.1f}% | PF: {s['profit_factor']:4.2f} | Net USD: ${s['net_profit_usd']:8.2f} | MaxDD: {s['max_drawdown_pct']:4.1f}% | Trades: {s['total_trades']}")
+

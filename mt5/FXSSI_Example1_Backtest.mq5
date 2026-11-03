@@ -18,8 +18,10 @@ input double           InpAccountBalance      = 10000.0;            // Starting 
 input group "---- [2] Strategy Example #1 Rules ----"
 input double           InpRatiosSellThreshold = 60.0;               // Ratios Sell Threshold (% Longs >= 60%)
 input double           InpRatiosBuyThreshold  = 40.0;               // Ratios Buy Threshold (% Longs <= 40%)
-input int              InpSlcMarginPoints     = 30;                 // Stop Loss Margin Beyond SLC (20-40 points)
-input int              InpTpTargetPoints      = 1500;               // Take Profit Target (Points / 15.00 Gold pts)
+input int              InpMaxStopLossPips     = 200;                // Max Stop Loss in Pips (Max 200 pips)
+input int              InpTakeProfitPips      = 300;                // Take Profit in Pips (300 pips)
+input double           InpPipSizeOverride     = 0.0;                // Custom Pip Size (0.0 = Auto-Detect: 0.10 Gold, 0.0001 FX)
+input int              InpSlcMarginPoints     = 30;                 // Margin Beyond MVP/SLC (Points)
 input int              InpMvpZoneFluctuateHrs = 5;                  // MVP Exit Fluctuation Range (4-7 hours)
 
 input group "---- [3] Chart Visuals & Export ----"
@@ -203,6 +205,32 @@ void GetSlcClusters(int shift, double &upper_slc, double &lower_slc)
 }
 
 //+------------------------------------------------------------------+
+//| Helper: Get Pip Size for Active Symbol                           |
+//+------------------------------------------------------------------+
+double GetPipSize()
+{
+   if(InpPipSizeOverride > 0.0) return InpPipSizeOverride;
+
+   double pt = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+   if(pt <= 0.0) pt = _Point;
+
+   string sym = _Symbol;
+   StringToUpper(sym);
+   // Gold / Silver / Metals:
+   // For 3-digit gold (e.g. 3920.123): 1 pip = 0.10 (100 points)
+   // For 2-digit gold (e.g. 3920.12): 1 pip = 0.10 (10 points)
+   if(StringFind(sym, "XAU") >= 0 || StringFind(sym, "GOLD") >= 0)
+   {
+      return (_Digits == 3) ? (pt * 100.0) : (pt * 10.0);
+   }
+
+   // 5-digit & 3-digit Forex:
+   if(_Digits == 3 || _Digits == 5) return (pt * 10.0);
+
+   return pt;
+}
+
+//+------------------------------------------------------------------+
 //| Script Program Start Function                                    |
 //+------------------------------------------------------------------+
 void OnStart()
@@ -353,21 +381,30 @@ void OnStart()
             active_trade.entry_price = next_o;
             active_trade.bars_held   = 0;
 
+            double pip = GetPipSize();
             double margin = InpSlcMarginPoints * pt;
-            double tp_dist = InpTpTargetPoints * pt;
-            if(tp_dist <= 0.0) tp_dist = 15.0; // $15 on gold
+            double max_sl_dist = InpMaxStopLossPips * pip; // Max 200 pips
+            double tp_dist = InpTakeProfitPips * pip;      // 300 pips TP
 
             if(fresh_sell)
             {
-               active_trade.sl = upper_slc + margin;
-               if(active_trade.sl <= active_trade.entry_price) active_trade.sl = active_trade.entry_price + (20.0);
-               active_trade.tp = active_trade.entry_price - tp_dist;
+               // Rule: SL must be above MVP line, max 200 pips
+               double base_sl = MathMax(mvp + margin, (upper_slc > next_o ? upper_slc + margin : mvp + margin));
+               if(base_sl <= mvp) base_sl = mvp + margin;
+               if(base_sl - next_o > max_sl_dist) base_sl = next_o + max_sl_dist;
+
+               active_trade.sl = NormalizeDouble(base_sl, _Digits);
+               active_trade.tp = NormalizeDouble(next_o - tp_dist, _Digits);
             }
             else
             {
-               active_trade.sl = lower_slc - margin;
-               if(active_trade.sl >= active_trade.entry_price) active_trade.sl = active_trade.entry_price - (20.0);
-               active_trade.tp = active_trade.entry_price + tp_dist;
+               // Rule: SL must be below MVP line, max 200 pips
+               double base_sl = MathMin(mvp - margin, (lower_slc > 0.0 && lower_slc < next_o ? lower_slc - margin : mvp - margin));
+               if(base_sl >= mvp) base_sl = mvp - margin;
+               if(next_o - base_sl > max_sl_dist) base_sl = next_o - max_sl_dist;
+
+               active_trade.sl = NormalizeDouble(base_sl, _Digits);
+               active_trade.tp = NormalizeDouble(next_o + tp_dist, _Digits);
             }
 
             in_trade = true;
@@ -475,3 +512,4 @@ void OnStart()
          trade_count, win_rate, pf, net_profit));
 }
 //+------------------------------------------------------------------+
+

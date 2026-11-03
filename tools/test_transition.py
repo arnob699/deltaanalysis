@@ -107,3 +107,4 @@ for target in [10.0, 15.0, 20.0, 25.0, 30.0, 40.0]:
     t = test_transition_signals(slc_margin=3.0, tp_target=target)
     s = analyze_performance(t)
     print(f"TP Target: {target:4.1f} pts | Trades: {s['total_trades']:2d} | WinRate: {s['win_rate_pct']:5.1f}% | ProfitFactor: {s['profit_factor']:4.2f} | Net USD: ${s['net_profit_usd']:8.2f} | MaxDD: {s['max_drawdown_pct']:4.1f}%")
+

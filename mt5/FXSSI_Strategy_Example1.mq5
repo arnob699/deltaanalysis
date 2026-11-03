@@ -31,8 +31,10 @@
 input group "---- [1] Strategy Example #1 Rule Settings ----"
 input double           InpRatiosSellThreshold = 60.0;               // Ratios Sell Threshold (% Longs >= 60%)
 input double           InpRatiosBuyThreshold  = 40.0;               // Ratios Buy Threshold (% Longs <= 40%)
-input int              InpSlcMarginPoints     = 30;                 // Stop Loss Margin Beyond SLC (20-40 points)
-input int              InpTpMarginPoints      = 10;                 // Take Profit Margin from MVP/SLC (5-10 points)
+input int              InpMaxStopLossPips     = 200;                // Max Stop Loss in Pips (Max 200 pips)
+input int              InpTakeProfitPips      = 300;                // Take Profit in Pips (300 pips)
+input double           InpPipSizeOverride     = 0.0;                // Pip Size Override (0.0 = Auto: 0.10 Gold, 0.0001 FX)
+input int              InpSlcMarginPoints     = 30;                 // Margin Beyond MVP/SLC (Points)
 input int              InpMvpFluctuateHours   = 5;                  // MVP Exit Fluctuation Range (4-7 hours)
 
 input group "---- [2] Indicator Binding / Fallback Paths ----"
@@ -330,49 +332,96 @@ void GetSlcClusters(int shift, double &upper_slc, double &lower_slc)
 }
 
 //+------------------------------------------------------------------+
-//| Calculate Stop Loss Level (20-40 points margin beyond SLC)        |
+//| Helper: Get Pip Size for Active Symbol                           |
 //+------------------------------------------------------------------+
-double CalculateStopLoss(ENUM_STRATEGY_SIGNAL sig, double entry, double upper_slc, double lower_slc)
+double GetPipSize()
+{
+   if(InpPipSizeOverride > 0.0) return InpPipSizeOverride;
+
+   double pt = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+   if(pt <= 0.0) pt = _Point;
+
+   string sym = _Symbol;
+   StringToUpper(sym);
+   // Gold / Silver / Metals:
+   // For 3-digit gold (e.g. 3920.123): 1 pip = 0.10 (100 points)
+   // For 2-digit gold (e.g. 3920.12): 1 pip = 0.10 (10 points)
+   if(StringFind(sym, "XAU") >= 0 || StringFind(sym, "GOLD") >= 0)
+   {
+      return (_Digits == 3) ? (pt * 100.0) : (pt * 10.0);
+   }
+
+   // 5-digit & 3-digit Forex:
+   if(_Digits == 3 || _Digits == 5) return (pt * 10.0);
+
+   return pt;
+}
+
+//+------------------------------------------------------------------+
+//| Calculate Stop Loss Level                                        |
+//| Rule: Must be above MVP line (for SELL) or below MVP line (for BUY)|
+//|       AND max 200 pips from entry.                               |
+//+------------------------------------------------------------------+
+double CalculateStopLoss(ENUM_STRATEGY_SIGNAL sig, double entry, double mvp_price, double upper_slc, double lower_slc)
 {
    double pt = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
    if(pt <= 0.0) pt = _Point;
+   double pip = GetPipSize();
+   double max_sl_dist = InpMaxStopLossPips * pip; // 200 pips max
    double margin = InpSlcMarginPoints * pt;
 
-   if(sig == SIGNAL_BUY)
+   if(sig == SIGNAL_SELL)
    {
-      // Placed 20-40 points beyond the lower Stop Loss cluster
-      double base = (lower_slc > 0.0 && lower_slc < entry) ? lower_slc : (entry - 100 * pt);
-      return NormalizeDouble(base - margin, _Digits);
+      // SELL: Price is below MVP. Stop Loss MUST be ABOVE the MVP line.
+      // Base: higher of (MVP + margin) or (Upper SLC + margin)
+      double base_sl = MathMax(mvp_price + margin, (upper_slc > entry ? upper_slc + margin : mvp_price + margin));
+      
+      // Enforce: strictly above MVP line
+      if(base_sl <= mvp_price) base_sl = mvp_price + margin;
+      
+      // Enforce: max 200 pips from entry
+      if(base_sl - entry > max_sl_dist)
+      {
+         base_sl = entry + max_sl_dist;
+      }
+
+      return NormalizeDouble(base_sl, _Digits);
    }
-   else if(sig == SIGNAL_SELL)
+   else if(sig == SIGNAL_BUY)
    {
-      // Placed 20-40 points beyond the upper Stop Loss cluster
-      double base = (upper_slc > 0.0 && upper_slc > entry) ? upper_slc : (entry + 100 * pt);
-      return NormalizeDouble(base + margin, _Digits);
+      // BUY: Price is above MVP. Stop Loss MUST be BELOW the MVP line.
+      // Base: lower of (MVP - margin) or (Lower SLC - margin)
+      double base_sl = MathMin(mvp_price - margin, (lower_slc > 0.0 && lower_slc < entry ? lower_slc - margin : mvp_price - margin));
+      
+      // Enforce: strictly below MVP line
+      if(base_sl >= mvp_price) base_sl = mvp_price - margin;
+      
+      // Enforce: max 200 pips from entry
+      if(entry - base_sl > max_sl_dist)
+      {
+         base_sl = entry - max_sl_dist;
+      }
+
+      return NormalizeDouble(base_sl, _Digits);
    }
    return 0.0;
 }
 
 //+------------------------------------------------------------------+
-//| Calculate Take Profit Level (Targeting the MVP Level)            |
+//| Calculate Take Profit Level (Targeting 300 Pips)                 |
 //+------------------------------------------------------------------+
-double CalculateTakeProfit(ENUM_STRATEGY_SIGNAL sig, double entry, double mvp_price)
+double CalculateTakeProfit(ENUM_STRATEGY_SIGNAL sig, double entry)
 {
-   double pt = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
-   if(pt <= 0.0) pt = _Point;
-   double margin = InpTpMarginPoints * pt;
+   double pip = GetPipSize();
+   double tp_dist = InpTakeProfitPips * pip; // 300 pips
 
    if(sig == SIGNAL_BUY)
    {
-      // Buy setup exits when price hits MVP above or upper target
-      double target = (mvp_price > entry) ? (mvp_price - margin) : (entry + 150 * pt);
-      return NormalizeDouble(target, _Digits);
+      return NormalizeDouble(entry + tp_dist, _Digits);
    }
    else if(sig == SIGNAL_SELL)
    {
-      // Sell setup exits when price hits MVP below or lower target
-      double target = (mvp_price < entry) ? (mvp_price + margin) : (entry - 150 * pt);
-      return NormalizeDouble(target, _Digits);
+      return NormalizeDouble(entry - tp_dist, _Digits);
    }
    return 0.0;
 }
@@ -383,9 +432,9 @@ double CalculateTakeProfit(ENUM_STRATEGY_SIGNAL sig, double entry, double mvp_pr
 void TriggerSignalAlert(SignalSetup &setup)
 {
    string type = (setup.signal == SIGNAL_BUY) ? "BUY SETUP" : "SELL SETUP";
-   string msg = StringFormat("[FXSSI Example #1] %s on %s (%s)!\nEntry: %.2f | MVP Target: %.2f | SL: %.2f | Ratios: %.1f%% Longs",
+   string msg = StringFormat("[FXSSI Example #1] %s on %s (%s)!\nEntry: %.2f | TP: %.2f (+%d pips) | SL: %.2f (Above MVP, Max %d pips) | Ratios: %.1f%% Longs",
                              type, _Symbol, EnumToString((ENUM_TIMEFRAMES)_Period),
-                             setup.entry_price, setup.take_profit, setup.stop_loss, setup.ratios_val);
+                             setup.entry_price, setup.take_profit, InpTakeProfitPips, setup.stop_loss, InpMaxStopLossPips, setup.ratios_val);
 
    if(InpEnableAlerts) Alert(msg);
    if(InpEnableSound && InpSoundFile != "") PlaySound(InpSoundFile);
@@ -418,16 +467,16 @@ void DrawTradeLines(SignalSetup &setup)
    ObjectSetInteger(0, g_line_sl, OBJPROP_WIDTH, 2);
    ObjectSetInteger(0, g_line_sl, OBJPROP_STYLE, STYLE_SOLID);
    ObjectSetInteger(0, g_line_sl, OBJPROP_RAY_RIGHT, true);
-   ObjectSetString(0, g_line_sl, OBJPROP_TEXT, StringFormat("Ex#1 Stop Loss (SLC + %d pts) @ %.2f", InpSlcMarginPoints, setup.stop_loss));
+   ObjectSetString(0, g_line_sl, OBJPROP_TEXT, StringFormat("Ex#1 Stop Loss (Above MVP, Max %d pips) @ %.2f", InpMaxStopLossPips, setup.stop_loss));
 
-   // 3. Take Profit Line (MVP Target)
+   // 3. Take Profit Line (300 Pips Target)
    ObjectDelete(0, g_line_tp);
    ObjectCreate(0, g_line_tp, OBJ_TREND, 0, t1, setup.take_profit, t2, setup.take_profit);
    ObjectSetInteger(0, g_line_tp, OBJPROP_COLOR, InpTpColor);
    ObjectSetInteger(0, g_line_tp, OBJPROP_WIDTH, 2);
    ObjectSetInteger(0, g_line_tp, OBJPROP_STYLE, STYLE_SOLID);
    ObjectSetInteger(0, g_line_tp, OBJPROP_RAY_RIGHT, true);
-   ObjectSetString(0, g_line_tp, OBJPROP_TEXT, StringFormat("Ex#1 Target (MVP Target) @ %.2f", setup.take_profit));
+   ObjectSetString(0, g_line_tp, OBJPROP_TEXT, StringFormat("Ex#1 Target (%d pips TP) @ %.2f", InpTakeProfitPips, setup.take_profit));
 
    ChartRedraw();
 }
@@ -571,11 +620,14 @@ void UpdateDashboard(SignalSetup &setup, double mvp, double ratios, double upper
    ObjectSetInteger(0, sig_name, OBJPROP_COLOR, sig_col);
 
    // 7. Order Execution Targets Line (SL, TP, R:R)
-   string tgt_str = "Plan: SL 20-40 pts beyond SLC cluster  |  Target at MVP level";
+   string tgt_str = StringFormat("Plan: SL max %d pips (above MVP)  |  TP %d pips", InpMaxStopLossPips, InpTakeProfitPips);
    if(setup.signal != SIGNAL_NONE)
    {
-      tgt_str = StringFormat("Entry: %.2f  |  SL: %.2f  |  TP (MVP): %.2f  |  R:R 1:%.1f",
-                             setup.entry_price, setup.stop_loss, setup.take_profit, setup.risk_reward);
+      double pip = GetPipSize();
+      double sl_pips = MathAbs(setup.entry_price - setup.stop_loss) / (pip > 0 ? pip : 1.0);
+      double tp_pips = MathAbs(setup.take_profit - setup.entry_price) / (pip > 0 ? pip : 1.0);
+      tgt_str = StringFormat("Entry: %.2f  |  SL: %.2f (%.0f pips)  |  TP: %.2f (%.0f pips)  |  R:R 1:%.1f",
+                             setup.entry_price, setup.stop_loss, sl_pips, setup.take_profit, tp_pips, setup.risk_reward);
    }
 
    if(ObjectFind(0, target_name) < 0)
@@ -708,8 +760,8 @@ void OnTimer()
 
    if(sig != SIGNAL_NONE)
    {
-      g_current_setup.stop_loss   = CalculateStopLoss(sig, cur_price, upper_slc, lower_slc);
-      g_current_setup.take_profit = CalculateTakeProfit(sig, cur_price, mvp);
+      g_current_setup.stop_loss   = CalculateStopLoss(sig, cur_price, mvp, upper_slc, lower_slc);
+      g_current_setup.take_profit = CalculateTakeProfit(sig, cur_price);
 
       double risk   = MathAbs(cur_price - g_current_setup.stop_loss);
       double reward = MathAbs(g_current_setup.take_profit - cur_price);

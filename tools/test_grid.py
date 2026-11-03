@@ -104,3 +104,4 @@ for mode in ['OPPOSING_SLC', 'FIXED_TARGET']:
         t = simulate_strategy(tp_mode=mode, slc_margin=3.0, tp_target_pts=target)
         s = analyze_performance(t)
         print(f"Mode: {mode:12s} | Target: {target:4.1f} pts | Trades: {s['total_trades']:3d} | WinRate: {s['win_rate_pct']:5.1f}% | ProfitFactor: {s['profit_factor']:4.2f} | Net USD: ${s['net_profit_usd']:8.2f} | MaxDD: {s['max_drawdown_pct']:4.1f}%")
+
