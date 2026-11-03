@@ -43,6 +43,9 @@ Write-Host "Restoring and deploying MT5 files..." -ForegroundColor Cyan
 Copy-Item (Join-Path $mt5Source "FXSSI_DailyDelta_Bridge.ex5") -Destination $dstExperts -Force
 Copy-Item (Join-Path $mt5Source "FXSSI_DailyDelta_Bridge.mq5") -Destination $dstExperts -Force
 Copy-Item (Join-Path $mt5Source "FXSSI_DailyDelta_Bridge.ex5") -Destination $dstIndicators -Force
+Copy-Item (Join-Path $mt5Source "FXSSI_Strategy_Example1.ex5") -Destination $dstIndicators -Force
+Copy-Item (Join-Path $mt5Source "FXSSI_Strategy_Example1.mq5") -Destination $dstIndicators -Force
+Write-Host "  [OK] Deployed FXSSI_Strategy_Example1 (.mq5 and .ex5) to Indicators" -ForegroundColor Green
 Write-Host "  [OK] Deployed FXSSI_DailyDelta_Bridge (.mq5 & .ex5) to Experts and Indicators" -ForegroundColor Green
 
 # 2. Copy One-Click Snapshot Script
