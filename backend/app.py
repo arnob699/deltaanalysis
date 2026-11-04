@@ -67,6 +67,14 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+@app.middleware("http")
+async def add_no_cache_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
+    return response
+
 MASTER_SNAPSHOT_PATH = BASE_DIR / "latest_snapshot_backup" / "fxssi_daily_delta.json"
 MASTER_DAYS_FILE = DATA_DIR / "master_days_store.json"
 
@@ -346,7 +354,7 @@ async def sync_data_from_mt5(request: Request):
 async def get_candles_endpoint(
     symbol: str = Query("XAUUSDm", description="Gold symbol"),
     timeframe: str = Query("M20", description="Timeframe (M20, M30, H1)"),
-    count: int = Query(500, description="Number of candles")
+    count: int = Query(2200, description="Number of candles")
 ):
     """
     Returns candlestick chart data with 200 MA, Middle Volume, Activity Delta, and Sentiment Ratio.

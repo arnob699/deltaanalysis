@@ -2038,13 +2038,13 @@ body {
 }
 
 .tv-chart-container.main-height {
-  height: 480px;
-  min-height: 400px;
+  height: 420px;
+  min-height: 360px;
 }
 
 .tv-chart-container.sub-height {
-  height: 170px;
-  min-height: 150px;
+  height: 150px;
+  min-height: 130px;
 }
 
 /* Footer status bar */

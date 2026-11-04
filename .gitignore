@@ -22,3 +22,7 @@ ENV/
 .vscode/
 .idea/
 
+# Tool screenshots
+tools/*.png
+
+

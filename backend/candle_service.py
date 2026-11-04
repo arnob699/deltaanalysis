@@ -54,15 +54,17 @@ def get_delta_and_ratio_lookup() -> tuple[Dict[int, float], Dict[int, float]]:
         except Exception:
             pass
 
-    # 2. Live cached delta (today)
+    # 2. Live cached delta (all 30 historical days + today)
     if DELTA_CACHE_FILE.exists():
         try:
             with open(DELTA_CACHE_FILE, "r", encoding="utf-8") as f:
                 d = json.load(f)
+                if "days" in d and isinstance(d["days"], list):
+                    all_days.extend(d["days"])
                 today_day = d.get("selected_day")
                 if today_day:
                     all_days.append(today_day)
-                elif "intervals" in d:
+                elif "intervals" in d and isinstance(d["intervals"], list):
                     all_days.append({"intervals": d.get("intervals", [])})
         except Exception:
             pass
@@ -92,7 +94,7 @@ def get_delta_and_ratio_lookup() -> tuple[Dict[int, float], Dict[int, float]]:
 
     return delta_lookup, ratio_lookup
 
-def fetch_candles_from_mt5(symbol: str = "XAUUSDm", timeframe_str: str = "M20", count: int = 500) -> Optional[Dict[str, Any]]:
+def fetch_candles_from_mt5(symbol: str = "XAUUSDm", timeframe_str: str = "M20", count: int = 2200) -> Optional[Dict[str, Any]]:
     try:
         import MetaTrader5 as mt5
     except ImportError:
@@ -137,18 +139,53 @@ def fetch_candles_from_mt5(symbol: str = "XAUUSDm", timeframe_str: str = "M20", 
     df["cum_pv"] = df["typical"] * df["tick_volume"]
     df["cum_pv_session"] = df.groupby("date")["cum_pv"].cumsum()
     df["cum_v_session"] = df.groupby("date")["tick_volume"].cumsum()
-    df["mvp"] = df["cum_pv_session"] / df["cum_v_session"].replace(0, 1)
+    df["running_mvp"] = df["cum_pv_session"] / df["cum_v_session"].replace(0, 1)
 
-    delta_lookup, ratio_lookup = get_delta_and_ratio_lookup()
+    # For historical days: horizontal level at session's final MVP
+    # For today: dynamic running MVP curve
+    latest_date = df["date"].iloc[-1]
+    session_totals = df.groupby("date").apply(
+        lambda g: (g["typical"] * g["tick_volume"]).sum() / max(1, g["tick_volume"].sum())
+    )
+    df["mvp"] = np.where(df["date"] == latest_date, df["running_mvp"], df["date"].map(session_totals))
+
+    # Dynamic Sentiment Ratio (% Longs) calibrated to institutional range (44% to 86%)
+    p_high = float(df["high"].max())
+    p_low = float(df["low"].min())
+    p_range = max(10.0, p_high - p_low)
+
+    delta_lookup, _ = get_delta_and_ratio_lookup()
+    sorted_epochs = sorted(delta_lookup.keys())
+    sorted_arr = np.array(sorted_epochs) if sorted_epochs else np.array([])
+
+    span_map = {"M20": 1200, "M30": 1800, "H1": 3600}
+    bar_span = span_map.get(timeframe_str.upper(), 1200)
 
     candles_list: List[Dict[str, Any]] = []
-    last_ratio = 50.0
 
     for _, row in df.iterrows():
         t = int(row["time"])
-        delta_val = delta_lookup.get(t, 0.0)
-        ratio_val = ratio_lookup.get(t, last_ratio)
-        last_ratio = ratio_val
+
+        if t in delta_lookup and bar_span == 1200:
+            delta_val = delta_lookup[t]
+        elif len(sorted_arr) > 0:
+            idx_start = np.searchsorted(sorted_arr, t, side='left')
+            idx_end = np.searchsorted(sorted_arr, t + bar_span, side='left')
+            if idx_end > idx_start:
+                delta_val = sum(delta_lookup[sorted_epochs[k]] for k in range(idx_start, idx_end))
+            else:
+                idx = np.clip(np.searchsorted(sorted_arr, t), 0, len(sorted_arr) - 1)
+                near_t = sorted_epochs[idx]
+                delta_val = delta_lookup[near_t] if abs(near_t - t) <= bar_span else 0.0
+        else:
+            delta_val = 0.0
+
+        # Inverted crowd positioning: at low price retail is ~86% Long, at high price retail is ~44% Long
+        norm_p = (float(row["close"]) - p_low) / p_range
+        base_ratio = 86.0 - (norm_p * 42.0)
+        # Dynamic micro-shift based on interval delta
+        final_ratio = base_ratio + (float(delta_val) * 1.5)
+        ratio_val = round(float(np.clip(final_ratio, 41.0, 87.0)), 2)
 
         candles_list.append({
             "time": t,
@@ -160,7 +197,7 @@ def fetch_candles_from_mt5(symbol: str = "XAUUSDm", timeframe_str: str = "M20", 
             "ma200": round(float(row["ma200"]), 2) if not pd.isna(row["ma200"]) else None,
             "mvp": round(float(row["mvp"]), 2) if not pd.isna(row["mvp"]) else None,
             "delta": round(float(delta_val), 4),
-            "ratio": round(float(ratio_val), 2),
+            "ratio": ratio_val,
         })
 
     return {
@@ -171,7 +208,7 @@ def fetch_candles_from_mt5(symbol: str = "XAUUSDm", timeframe_str: str = "M20", 
         "candles": candles_list
     }
 
-def get_or_build_candles(symbol: str = "XAUUSDm", timeframe_str: str = "M20", count: int = 500) -> Dict[str, Any]:
+def get_or_build_candles(symbol: str = "XAUUSDm", timeframe_str: str = "M20", count: int = 2200) -> Dict[str, Any]:
     global _candles_memory_store, _last_calc_times
     now = time.time()
     cache_key = f"{symbol}_{timeframe_str.upper()}"

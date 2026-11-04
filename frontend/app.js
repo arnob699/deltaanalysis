@@ -20,6 +20,8 @@ document.addEventListener('DOMContentLoaded', () => {
   initEventListeners();
   initViewSwitcher();
   initChart();
+  initLiveChart();
+  loadCandlesData(activeTimeframe, true);
   fetchDeltaData();
   startPolling();
 });
@@ -1071,7 +1073,7 @@ function showToast(message, type = 'info') {
    4. VIEW SWITCHER (ACTIVITY DELTA vs LIVE CHART)
    ========================================================================== */
 
-let activeView = 'delta'; // 'delta' | 'livechart'
+let activeView = 'livechart'; // 'livechart' | 'delta' (Default to Live Chart)
 
 function initViewSwitcher() {
   const btnDelta = document.getElementById('nav-btn-delta');
@@ -1081,6 +1083,10 @@ function initViewSwitcher() {
 
   function switchView(target) {
     activeView = target;
+    try {
+      localStorage.setItem('terminal_active_view', target);
+    } catch (_) {}
+
     if (target === 'delta') {
       btnDelta?.classList.add('active');
       btnLiveChart?.classList.remove('active');
@@ -1103,6 +1109,18 @@ function initViewSwitcher() {
 
   btnDelta?.addEventListener('click', () => switchView('delta'));
   btnLiveChart?.addEventListener('click', () => switchView('livechart'));
+
+  // Check saved view: default to livechart unless user specifically chose delta
+  try {
+    const saved = localStorage.getItem('terminal_active_view');
+    if (saved === 'delta' && window.location.hash !== '#live-chart') {
+      switchView('delta');
+    } else {
+      switchView('livechart');
+    }
+  } catch (_) {
+    switchView('livechart');
+  }
 }
 
 /* ==========================================================================
@@ -1121,7 +1139,7 @@ let seriesRatio = null;
 
 let activeTimeframe = 'M20';
 let isTvInitialized = false;
-let isSyncingRange = false;
+let activeSyncChart = null;
 let latestBarRecord = null;
 let isCrosshairHovered = false;
 
@@ -1172,6 +1190,10 @@ function initLiveChart() {
       timeVisible: true,
       secondsVisible: false,
     },
+    rightPriceScale: {
+      borderColor: 'rgba(255, 255, 255, 0.08)',
+      minimumWidth: 80,
+    },
     handleScroll: {
       mouseWheel: true,
       pressedMouseMove: true,
@@ -1191,9 +1213,10 @@ function initLiveChart() {
   tvChartMain = LightweightCharts.createChart(containerMain, {
     ...baseTheme,
     width: chartWidth,
-    height: containerMain.clientHeight || 480,
+    height: containerMain.clientHeight || 460,
     rightPriceScale: {
       borderColor: 'rgba(255, 255, 255, 0.08)',
+      minimumWidth: 80,
       scaleMargins: { top: 0.08, bottom: 0.12 },
     },
   });
@@ -1228,9 +1251,10 @@ function initLiveChart() {
   tvChartDelta = LightweightCharts.createChart(containerDelta, {
     ...baseTheme,
     width: chartWidth,
-    height: containerDelta.clientHeight || 170,
+    height: containerDelta.clientHeight || 160,
     rightPriceScale: {
       borderColor: 'rgba(255, 255, 255, 0.08)',
+      minimumWidth: 80,
       scaleMargins: { top: 0.15, bottom: 0.15 },
     },
   });
@@ -1253,9 +1277,10 @@ function initLiveChart() {
   tvChartRatio = LightweightCharts.createChart(containerRatio, {
     ...baseTheme,
     width: chartWidth,
-    height: containerRatio.clientHeight || 170,
+    height: containerRatio.clientHeight || 160,
     rightPriceScale: {
       borderColor: 'rgba(255, 255, 255, 0.08)',
+      minimumWidth: 80,
       scaleMargins: { top: 0.15, bottom: 0.15 },
     },
   });
@@ -1310,136 +1335,153 @@ function initLiveChart() {
 
 function linkChartsTimeScale(charts) {
   charts.forEach(chart => {
+    const el = chart.chartElement();
+    if (el) {
+      el.addEventListener('mouseenter', () => { activeSyncChart = chart; });
+      el.addEventListener('touchstart', () => { activeSyncChart = chart; }, { passive: true });
+    }
+
     chart.timeScale().subscribeVisibleLogicalRangeChange(range => {
-      if (isSyncingRange || !range) return;
-      isSyncingRange = true;
+      if (activeSyncChart && activeSyncChart !== chart) return;
+      if (!range) return;
       charts.forEach(other => {
         if (other !== chart) {
           other.timeScale().setVisibleLogicalRange(range);
         }
       });
-      isSyncingRange = false;
     });
   });
 }
 
+const candleMapByTime = new Map();
+let isSyncingCrosshair = false;
+
 function setupCrosshairSync() {
-  const charts = [
-    { chart: tvChartMain, role: 'main' },
-    { chart: tvChartDelta, role: 'delta' },
-    { chart: tvChartRatio, role: 'ratio' },
+  const chartConfigs = [
+    {
+      chart: tvChartMain,
+      role: 'main',
+      syncOthers: (c, time) => {
+        if (tvChartDelta && seriesDelta) {
+          tvChartDelta.setCrosshairPosition(c.delta || 0, time, seriesDelta);
+        }
+        if (tvChartRatio && seriesRatio) {
+          tvChartRatio.setCrosshairPosition(c.ratio || 50, time, seriesRatio);
+        }
+      }
+    },
+    {
+      chart: tvChartDelta,
+      role: 'delta',
+      syncOthers: (c, time) => {
+        if (tvChartMain && seriesCandles) {
+          tvChartMain.setCrosshairPosition(c.close, time, seriesCandles);
+        }
+        if (tvChartRatio && seriesRatio) {
+          tvChartRatio.setCrosshairPosition(c.ratio || 50, time, seriesRatio);
+        }
+      }
+    },
+    {
+      chart: tvChartRatio,
+      role: 'ratio',
+      syncOthers: (c, time) => {
+        if (tvChartMain && seriesCandles) {
+          tvChartMain.setCrosshairPosition(c.close, time, seriesCandles);
+        }
+        if (tvChartDelta && seriesDelta) {
+          tvChartDelta.setCrosshairPosition(c.delta || 0, time, seriesDelta);
+        }
+      }
+    }
   ];
 
-  charts.forEach(({ chart }) => {
-    chart.subscribeCrosshairMove(param => {
-      if (!param || !param.time || !param.seriesData) {
+  chartConfigs.forEach(cfg => {
+    if (!cfg.chart) return;
+    cfg.chart.subscribeCrosshairMove(param => {
+      if (isSyncingCrosshair) return;
+
+      if (!param || !param.time || param.point === undefined || param.point.x < 0 || param.point.y < 0) {
+        // Pointer left this chart pane
+        isSyncingCrosshair = true;
+        try {
+          if (tvChartMain) tvChartMain.clearCrosshairPosition();
+          if (tvChartDelta) tvChartDelta.clearCrosshairPosition();
+          if (tvChartRatio) tvChartRatio.clearCrosshairPosition();
+        } catch (_) {}
+        isSyncingCrosshair = false;
         isCrosshairHovered = false;
         renderLatestToLegend();
         return;
       }
+
       isCrosshairHovered = true;
-      renderParamToLegend(param);
+      const c = candleMapByTime.get(param.time);
+      if (c) {
+        isSyncingCrosshair = true;
+        try {
+          cfg.syncOthers(c, param.time);
+        } catch (_) {}
+        isSyncingCrosshair = false;
+
+        renderRecordToLegend(c);
+      }
     });
   });
 }
 
-function renderParamToLegend(param) {
-  const cData = param.seriesData.get(seriesCandles);
-  const maData = param.seriesData.get(seriesMa200);
-  const mvpData = param.seriesData.get(seriesMvp);
-  const deltaData = param.seriesData.get(seriesDelta);
-  const ratioData = param.seriesData.get(seriesRatio);
+function renderRecordToLegend(c) {
+  if (!c) return;
 
-  if (param.time) {
-    const tEl = document.getElementById('tv-leg-time');
-    if (tEl) {
-      const d = new Date(param.time * 1000);
-      const bstTime = new Date(d.getTime() + (6 * 3600000));
-      tEl.textContent = formatTimeBst(bstTime);
-    }
-  }
-
-  if (cData) {
-    const op = document.getElementById('tv-leg-open');
-    const hi = document.getElementById('tv-leg-high');
-    const lo = document.getElementById('tv-leg-low');
-    const cl = document.getElementById('tv-leg-close');
-    if (op && cData.open !== undefined) op.textContent = cData.open.toFixed(2);
-    if (hi && cData.high !== undefined) hi.textContent = cData.high.toFixed(2);
-    if (lo && cData.low !== undefined) lo.textContent = cData.low.toFixed(2);
-    if (cl && cData.close !== undefined) cl.textContent = cData.close.toFixed(2);
-  }
-
-  if (maData && maData.value !== undefined) {
-    const el = document.getElementById('tv-leg-ma');
-    if (el) el.textContent = maData.value.toFixed(2);
-  }
-
-  if (mvpData && mvpData.value !== undefined) {
-    const el = document.getElementById('tv-leg-mvp');
-    if (el) el.textContent = mvpData.value.toFixed(2);
-  }
-
-  if (deltaData && deltaData.value !== undefined) {
-    const dVal = deltaData.value;
-    const dEl = document.getElementById('tv-leg-delta');
-    if (dEl) {
-      dEl.textContent = (dVal > 0 ? '+' : '') + dVal.toFixed(2) + '%';
-      dEl.className = 'mono ' + (dVal >= 0 ? 'val-pos' : 'val-neg');
-    }
-  }
-
-  if (ratioData && ratioData.value !== undefined) {
-    const rEl = document.getElementById('tv-leg-ratio');
-    if (rEl) rEl.textContent = ratioData.value.toFixed(1) + '% Longs';
-  }
-}
-
-function renderLatestToLegend() {
-  if (!latestBarRecord) return;
-  const b = latestBarRecord;
   const tEl = document.getElementById('tv-leg-time');
-  if (tEl && b.time) {
-    const d = new Date(b.time * 1000);
+  if (tEl && c.time) {
+    const d = new Date(c.time * 1000);
     const bstTime = new Date(d.getTime() + (6 * 3600000));
-    tEl.textContent = formatTimeBst(bstTime);
+    tEl.textContent = formatDateTimeBst(bstTime);
   }
 
   const op = document.getElementById('tv-leg-open');
   const hi = document.getElementById('tv-leg-high');
   const lo = document.getElementById('tv-leg-low');
   const cl = document.getElementById('tv-leg-close');
-  if (op && b.open) op.textContent = b.open.toFixed(2);
-  if (hi && b.high) hi.textContent = b.high.toFixed(2);
-  if (lo && b.low) lo.textContent = b.low.toFixed(2);
-  if (cl && b.close) cl.textContent = b.close.toFixed(2);
+  if (op && c.open !== undefined) op.textContent = c.open.toFixed(2);
+  if (hi && c.high !== undefined) hi.textContent = c.high.toFixed(2);
+  if (lo && c.low !== undefined) lo.textContent = c.low.toFixed(2);
+  if (cl && c.close !== undefined) cl.textContent = c.close.toFixed(2);
 
   const maEl = document.getElementById('tv-leg-ma');
-  if (maEl && b.ma200) maEl.textContent = b.ma200.toFixed(2);
+  if (maEl) maEl.textContent = (c.ma200 !== null && c.ma200 !== undefined) ? c.ma200.toFixed(2) : '--';
 
   const mvpEl = document.getElementById('tv-leg-mvp');
-  if (mvpEl && b.mvp) mvpEl.textContent = b.mvp.toFixed(2);
+  if (mvpEl) mvpEl.textContent = (c.mvp !== null && c.mvp !== undefined) ? c.mvp.toFixed(2) : '--';
 
-  if (b.delta !== undefined) {
-    const dEl = document.getElementById('tv-leg-delta');
-    if (dEl) {
-      dEl.textContent = (b.delta > 0 ? '+' : '') + b.delta.toFixed(2) + '%';
-      dEl.className = 'mono ' + (b.delta >= 0 ? 'val-pos' : 'val-neg');
-    }
+  const dEl = document.getElementById('tv-leg-delta');
+  if (dEl && c.delta !== undefined) {
+    const dVal = c.delta;
+    dEl.textContent = (dVal > 0 ? '+' : '') + dVal.toFixed(2) + '%';
+    dEl.className = 'mono ' + (dVal >= 0 ? 'val-pos' : 'val-neg');
   }
 
-  if (b.ratio !== undefined) {
-    const rEl = document.getElementById('tv-leg-ratio');
-    if (rEl) rEl.textContent = b.ratio.toFixed(1) + '% Longs';
+  const rEl = document.getElementById('tv-leg-ratio');
+  if (rEl && c.ratio !== undefined) {
+    rEl.textContent = c.ratio.toFixed(1) + '% Longs';
   }
 }
 
-function formatTimeBst(d) {
+function renderLatestToLegend() {
+  if (!latestBarRecord) return;
+  renderRecordToLegend(latestBarRecord);
+}
+
+function formatDateTimeBst(d) {
+  const yr = d.getUTCFullYear();
+  const mo = String(d.getUTCMonth() + 1).padStart(2, '0');
+  const da = String(d.getUTCDate()).padStart(2, '0');
   let h = d.getUTCHours();
   const m = String(d.getUTCMinutes()).padStart(2, '0');
   const ampm = h >= 12 ? 'PM' : 'AM';
   h = h % 12 || 12;
-  return `${String(h).padStart(2, '0')}:${m} ${ampm} BST`;
+  return `${yr}.${mo}.${da} ${String(h).padStart(2, '0')}:${m} ${ampm} BST`;
 }
 
 function setupChartControls() {
@@ -1511,11 +1553,16 @@ function resizeLiveCharts() {
 async function loadCandlesData(timeframe = 'M20', isInitial = false) {
   if (!isTvInitialized && activeView !== 'livechart') return;
   try {
-    const res = await fetch(`/api/candles?symbol=XAUUSDm&timeframe=${timeframe}&count=500`);
+    const res = await fetch(`/api/candles?symbol=XAUUSDm&timeframe=${timeframe}&count=2200`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
     const candles = data.candles || [];
     if (candles.length === 0) return;
+
+    candleMapByTime.clear();
+    for (const c of candles) {
+      candleMapByTime.set(c.time, c);
+    }
 
     latestBarRecord = candles[candles.length - 1];
 
@@ -1561,10 +1608,19 @@ async function loadCandlesData(timeframe = 'M20', isInitial = false) {
       if (seriesDelta) seriesDelta.setData(deltaBars);
       if (seriesRatio) seriesRatio.setData(ratioBars);
 
-      if (tvChartMain) tvChartMain.timeScale().fitContent();
+      // Set comfortable initial TradingView zoom (showing ~90 recent bars with whitespace, with all 2200 bars accessible)
+      const totalBars = candleBars.length;
+      if (totalBars > 0 && tvChartMain) {
+        const fromBar = Math.max(0, totalBars - 90);
+        const toBar = totalBars + 5;
+        tvChartMain.timeScale().setVisibleLogicalRange({ from: fromBar, to: toBar });
+        if (tvChartDelta) tvChartDelta.timeScale().setVisibleLogicalRange({ from: fromBar, to: toBar });
+        if (tvChartRatio) tvChartRatio.timeScale().setVisibleLogicalRange({ from: fromBar, to: toBar });
+      }
     } else {
       // Incremental real-time update of latest bar (Fluid zero-interruption pan/zoom!)
       const c = latestBarRecord;
+      candleMapByTime.set(c.time, c);
       if (seriesCandles) {
         seriesCandles.update({
           time: c.time,

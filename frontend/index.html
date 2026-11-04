@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <title>Public Activity Delta — Gold (XAU/USD) Flow & Sentiment Terminal</title>
-  <link rel="stylesheet" href="/static/style.css">
+  <link rel="stylesheet" href="/static/style.css?v=2.3">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@500;600;700;800&display=swap" rel="stylesheet">
@@ -12,7 +12,7 @@
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
   <script>window.Chart || document.write('<script src="/static/chart.umd.min.js"><\/script>')</script>
   <!-- TradingView Lightweight Charts Library -->
-  <script src="/static/lightweight-charts.standalone.production.js"></script>
+  <script src="/static/lightweight-charts.standalone.production.js?v=2.3"></script>
 </head>
 <body>
   <div id="app">
@@ -84,17 +84,17 @@
 
       </div>
 
-      <!-- VIEW NAVIGATION BAR: ACTIVITY DELTA vs LIVE CHART -->
+      <!-- VIEW NAVIGATION BAR: LIVE CHART & ACTIVITY DELTA -->
       <div class="view-nav-strip">
         <div class="nav-tabs-container">
-          <button id="nav-btn-delta" class="view-tab-btn active" data-view="delta">
-            <span class="tab-icon">📊</span>
-            <span class="tab-label">Activity Delta</span>
-          </button>
-          <button id="nav-btn-livechart" class="view-tab-btn" data-view="livechart">
+          <button id="nav-btn-livechart" class="view-tab-btn active" data-view="livechart">
             <span class="tab-icon">📈</span>
             <span class="tab-label">Live Chart</span>
             <span class="tab-pulse-badge">LIVE</span>
+          </button>
+          <button id="nav-btn-delta" class="view-tab-btn" data-view="delta">
+            <span class="tab-icon">📊</span>
+            <span class="tab-label">Activity Delta</span>
           </button>
         </div>
       </div>
@@ -113,7 +113,7 @@
     <main class="terminal-content">
 
       <!-- VIEW PANE 1: ACTIVITY DELTA DASHBOARD -->
-      <div id="view-activity-delta" class="view-pane active">
+      <div id="view-activity-delta" class="view-pane hidden">
 
       <!-- SESSION SELECTOR & QUICK REFRESH BAR -->
       <section class="session-strip-card">
@@ -394,7 +394,7 @@
       </div><!-- /view-activity-delta -->
 
       <!-- VIEW PANE 2: TRADINGVIEW-STYLE LIVE CHART -->
-      <div id="view-live-chart" class="view-pane hidden">
+      <div id="view-live-chart" class="view-pane active">
         <section class="live-chart-workspace">
 
           <!-- TOOLBAR & CROSSHAIR LEGEND STRIP -->
@@ -576,6 +576,6 @@
 
   </div>
 
-  <script src="/static/app.js"></script>
+  <script src="/static/app.js?v=2.3"></script>
 </body>
 </html>
