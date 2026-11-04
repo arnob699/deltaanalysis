@@ -1333,22 +1333,22 @@ function initLiveChart() {
   isTvInitialized = true;
 }
 
+let isSyncingRange = false;
+
 function linkChartsTimeScale(charts) {
   charts.forEach(chart => {
-    const el = chart.chartElement();
-    if (el) {
-      el.addEventListener('mouseenter', () => { activeSyncChart = chart; });
-      el.addEventListener('touchstart', () => { activeSyncChart = chart; }, { passive: true });
-    }
-
     chart.timeScale().subscribeVisibleLogicalRangeChange(range => {
-      if (activeSyncChart && activeSyncChart !== chart) return;
-      if (!range) return;
-      charts.forEach(other => {
-        if (other !== chart) {
-          other.timeScale().setVisibleLogicalRange(range);
-        }
-      });
+      if (isSyncingRange || !range) return;
+      isSyncingRange = true;
+      try {
+        charts.forEach(other => {
+          if (other !== chart) {
+            other.timeScale().setVisibleLogicalRange(range);
+          }
+        });
+      } finally {
+        isSyncingRange = false;
+      }
     });
   });
 }
@@ -1484,6 +1484,58 @@ function formatDateTimeBst(d) {
   return `${yr}.${mo}.${da} ${String(h).padStart(2, '0')}:${m} ${ampm} BST`;
 }
 
+let activeRange = '25d';
+
+function setChartRange(rangeKey = '25d') {
+  activeRange = rangeKey;
+  document.querySelectorAll('.tv-range-btn').forEach(b => {
+    b.classList.toggle('active', b.dataset.range === rangeKey);
+  });
+
+  const arr = Array.from(candleMapByTime.values());
+  if (arr.length === 0 || !tvChartMain) return;
+
+  const totalBars = arr.length;
+  const nowSec = arr[totalBars - 1].time;
+  let fromBar = 0;
+
+  if (rangeKey === '25d') {
+    // 28 calendar days = ~25 trading sessions
+    const cutoff = nowSec - (28 * 86400);
+    for (let i = 0; i < arr.length; i++) {
+      if (arr[i].time >= cutoff) {
+        fromBar = i;
+        break;
+      }
+    }
+  } else if (rangeKey === '7d') {
+    const cutoff = nowSec - (7 * 86400);
+    for (let i = 0; i < arr.length; i++) {
+      if (arr[i].time >= cutoff) {
+        fromBar = i;
+        break;
+      }
+    }
+  } else if (rangeKey === '1d') {
+    const cutoff = nowSec - (1 * 86400);
+    for (let i = 0; i < arr.length; i++) {
+      if (arr[i].time >= cutoff) {
+        fromBar = i;
+        break;
+      }
+    }
+  } else if (rangeKey === 'all') {
+    fromBar = 0;
+  }
+
+  const toBar = totalBars + 8;
+  isSyncingRange = true;
+  tvChartMain.timeScale().setVisibleLogicalRange({ from: fromBar, to: toBar });
+  if (tvChartDelta) tvChartDelta.timeScale().setVisibleLogicalRange({ from: fromBar, to: toBar });
+  if (tvChartRatio) tvChartRatio.timeScale().setVisibleLogicalRange({ from: fromBar, to: toBar });
+  setTimeout(() => { isSyncingRange = false; }, 120);
+}
+
 function setupChartControls() {
   // Timeframe buttons
   document.querySelectorAll('.tv-tf-btn').forEach(btn => {
@@ -1492,6 +1544,14 @@ function setupChartControls() {
       btn.classList.add('active');
       activeTimeframe = btn.dataset.tf || 'M20';
       loadCandlesData(activeTimeframe, true);
+    });
+  });
+
+  // Visible Range buttons (25 Days, 7 Days, 1 Day, All)
+  document.querySelectorAll('.tv-range-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const r = btn.dataset.range || '25d';
+      setChartRange(r);
     });
   });
 
@@ -1518,7 +1578,7 @@ function setupChartControls() {
   const btnFit = document.getElementById('tv-btn-fit');
   if (btnFit) {
     btnFit.addEventListener('click', () => {
-      if (tvChartMain) tvChartMain.timeScale().fitContent();
+      setChartRange('all');
     });
   }
 }
@@ -1608,15 +1668,8 @@ async function loadCandlesData(timeframe = 'M20', isInitial = false) {
       if (seriesDelta) seriesDelta.setData(deltaBars);
       if (seriesRatio) seriesRatio.setData(ratioBars);
 
-      // Set comfortable initial TradingView zoom (showing ~90 recent bars with whitespace, with all 2200 bars accessible)
-      const totalBars = candleBars.length;
-      if (totalBars > 0 && tvChartMain) {
-        const fromBar = Math.max(0, totalBars - 90);
-        const toBar = totalBars + 5;
-        tvChartMain.timeScale().setVisibleLogicalRange({ from: fromBar, to: toBar });
-        if (tvChartDelta) tvChartDelta.timeScale().setVisibleLogicalRange({ from: fromBar, to: toBar });
-        if (tvChartRatio) tvChartRatio.timeScale().setVisibleLogicalRange({ from: fromBar, to: toBar });
-      }
+      // Show the selected range (defaults to the full 25 trading days!)
+      setChartRange(activeRange);
     } else {
       // Incremental real-time update of latest bar (Fluid zero-interruption pan/zoom!)
       const c = latestBarRecord;

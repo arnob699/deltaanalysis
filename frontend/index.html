@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <title>Public Activity Delta — Gold (XAU/USD) Flow & Sentiment Terminal</title>
-  <link rel="stylesheet" href="/static/style.css?v=2.3">
+  <link rel="stylesheet" href="/static/style.css?v=2.4">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@500;600;700;800&display=swap" rel="stylesheet">
@@ -12,7 +12,7 @@
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
   <script>window.Chart || document.write('<script src="/static/chart.umd.min.js"><\/script>')</script>
   <!-- TradingView Lightweight Charts Library -->
-  <script src="/static/lightweight-charts.standalone.production.js?v=2.3"></script>
+  <script src="/static/lightweight-charts.standalone.production.js?v=2.4"></script>
 </head>
 <body>
   <div id="app">
@@ -411,6 +411,13 @@
                 <button class="tv-tf-btn" data-tf="M30">M30</button>
                 <button class="tv-tf-btn" data-tf="H1">H1</button>
               </div>
+
+              <div class="tv-range-group" title="Quick Visible Range View">
+                <button class="tv-range-btn active" data-range="25d">25 Days</button>
+                <button class="tv-range-btn" data-range="7d">7 Days</button>
+                <button class="tv-range-btn" data-range="1d">1 Day</button>
+                <button class="tv-range-btn" data-range="all">All</button>
+              </div>
             </div>
 
             <!-- Dynamic Crosshair / Real-Time Legend Readout -->
@@ -576,6 +583,6 @@
 
   </div>
 
-  <script src="/static/app.js?v=2.3"></script>
+  <script src="/static/app.js?v=2.4"></script>
 </body>
 </html>
