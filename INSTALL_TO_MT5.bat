@@ -2,7 +2,7 @@
 setlocal enabledelayedexpansion
 
 echo =====================================================================
-echo    FXSSI Gold Delta Bridge — Automated MT5 Reinstaller / Restorer
+echo    Public Activity Delta Bridge — Automated MT5 Reinstaller / Restorer
 echo =====================================================================
 echo.
 

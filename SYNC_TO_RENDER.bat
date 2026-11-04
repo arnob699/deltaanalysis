@@ -2,7 +2,7 @@
 setlocal enabledelayedexpansion
 
 echo =====================================================================
-echo    FXSSI Gold Delta — Live Cloud Stream to Render (1-Sec Sync)
+echo    Public Activity Delta — Live Cloud Stream to Render (1-Sec Sync)
 echo =====================================================================
 echo.
 

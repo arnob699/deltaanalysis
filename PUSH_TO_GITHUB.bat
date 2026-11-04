@@ -2,7 +2,7 @@
 setlocal
 
 echo =====================================================================
-echo    Push FXSSI Gold Delta to GitHub: arnob699/deltaanalysis
+echo    Push Public Activity Delta to GitHub: arnob699/deltaanalysis
 echo =====================================================================
 echo.
 

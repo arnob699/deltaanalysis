@@ -2,7 +2,7 @@
 setlocal
 
 echo =====================================================================
-echo    FXSSI Gold Delta — Live Online Bridge (1-Second Auto-Sync)
+echo    Public Activity Delta — Live Online Bridge (1-Second Auto-Sync)
 echo =====================================================================
 echo.
 

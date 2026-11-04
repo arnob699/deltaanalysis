@@ -2,7 +2,7 @@
 setlocal enabledelayedexpansion
 
 echo =====================================================================
-echo    FXSSI Gold Delta — Live in BOTH Localhost & Render Server
+echo    Public Activity Delta — Live in BOTH Localhost & Render Server
 echo =====================================================================
 echo.
 

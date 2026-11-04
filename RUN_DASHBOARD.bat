@@ -2,7 +2,7 @@
 setlocal
 
 echo =====================================================================
-echo    FXSSI Gold Delta Live Bridge & Institutional Dashboard
+echo    Public Activity Delta Live Bridge & Institutional Dashboard
 echo =====================================================================
 echo.
 
