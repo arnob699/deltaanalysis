@@ -4,8 +4,6 @@ import time
 from pathlib import Path
 from datetime import datetime, timezone
 from typing import Dict, Any, Optional, List
-import pandas as pd
-import numpy as np
 
 # Base paths
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -119,6 +117,12 @@ def fetch_candles_from_mt5(symbol: str = "XAUUSDm", timeframe_str: str = "M20", 
         mt5.shutdown()
 
     if rates is None or len(rates) == 0:
+        return None
+
+    try:
+        import pandas as pd
+        import numpy as np
+    except ImportError:
         return None
 
     df = pd.DataFrame(rates)
