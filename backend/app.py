@@ -20,10 +20,13 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 
 # Base directories
 BASE_DIR = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(BASE_DIR))
 FRONTEND_DIR = BASE_DIR / "frontend"
 DATA_DIR = BASE_DIR / "backend" / "data"
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 CACHE_FILE = DATA_DIR / "cached_delta.json"
+
+from backend.candle_service import get_or_build_candles, update_candles_from_sync
 
 # Discover MT5 Files directory
 def locate_mt5_files_dir() -> Path:
@@ -321,6 +324,13 @@ async def sync_data_from_mt5(request: Request):
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Invalid JSON: {e}")
 
+    # Check if candle data is included in sync payload
+    if "candles_cache" in incoming_data:
+        try:
+            update_candles_from_sync(incoming_data["candles_cache"])
+        except Exception as e:
+            print(f"[Sync] Error updating candles cache: {e}")
+
     now = time.time()
     merged = merge_and_assemble_payload(incoming_data, None, save_to_disk=True)
     merged["mt5_online"] = True
@@ -331,6 +341,29 @@ async def sync_data_from_mt5(request: Request):
     last_known_payload = merged
     save_cached_payload(merged)
     return {"status": "SUCCESS", "total_days": len(merged.get("days", []))}
+
+@app.get("/api/candles")
+async def get_candles_endpoint(
+    symbol: str = Query("XAUUSDm", description="Gold symbol"),
+    timeframe: str = Query("M20", description="Timeframe (M20, M30, H1)"),
+    count: int = Query(500, description="Number of candles")
+):
+    """
+    Returns candlestick chart data with 200 MA, Middle Volume, Activity Delta, and Sentiment Ratio.
+    """
+    return get_or_build_candles(symbol, timeframe, count)
+
+@app.post("/api/sync_candles")
+async def sync_candles_endpoint(request: Request):
+    """
+    Receives bulk candle cache updates from local PC sync agent.
+    """
+    try:
+        payload = await request.json()
+        update_candles_from_sync(payload)
+        return {"status": "SUCCESS", "updated_keys": list(payload.keys())}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Error syncing candles: {e}")
 
 @app.get("/api/history")
 async def get_history():

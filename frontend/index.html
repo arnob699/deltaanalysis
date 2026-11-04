@@ -11,6 +11,8 @@
   <!-- Chart.js with local offline fallback support -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
   <script>window.Chart || document.write('<script src="/static/chart.umd.min.js"><\/script>')</script>
+  <!-- TradingView Lightweight Charts Library -->
+  <script src="/static/lightweight-charts.standalone.production.js"></script>
 </head>
 <body>
   <div id="app">
@@ -82,6 +84,21 @@
 
       </div>
 
+      <!-- VIEW NAVIGATION BAR: ACTIVITY DELTA vs LIVE CHART -->
+      <div class="view-nav-strip">
+        <div class="nav-tabs-container">
+          <button id="nav-btn-delta" class="view-tab-btn active" data-view="delta">
+            <span class="tab-icon">📊</span>
+            <span class="tab-label">Activity Delta</span>
+          </button>
+          <button id="nav-btn-livechart" class="view-tab-btn" data-view="livechart">
+            <span class="tab-icon">📈</span>
+            <span class="tab-label">Live Chart</span>
+            <span class="tab-pulse-badge">LIVE</span>
+          </button>
+        </div>
+      </div>
+
       <!-- Collapsible Alert / Sync Notification -->
       <div id="banner-warning-details" class="status-alert-strip hidden">
         <div class="alert-content">
@@ -94,6 +111,9 @@
 
     <!-- MAIN TERMINAL CONTENT WRAPPER -->
     <main class="terminal-content">
+
+      <!-- VIEW PANE 1: ACTIVITY DELTA DASHBOARD -->
+      <div id="view-activity-delta" class="view-pane active">
 
       <!-- SESSION SELECTOR & QUICK REFRESH BAR -->
       <section class="session-strip-card">
@@ -370,6 +390,132 @@
           </table>
         </div>
       </section>
+
+      </div><!-- /view-activity-delta -->
+
+      <!-- VIEW PANE 2: TRADINGVIEW-STYLE LIVE CHART -->
+      <div id="view-live-chart" class="view-pane hidden">
+        <section class="live-chart-workspace">
+
+          <!-- TOOLBAR & CROSSHAIR LEGEND STRIP -->
+          <div class="tv-toolbar-card">
+            <div class="tv-toolbar-left">
+              <div class="tv-symbol-pill">
+                <span class="gold-symbol">✦</span>
+                <span class="tv-sym-title">XAUUSDm</span>
+                <span class="tv-sym-sub">Gold Spot</span>
+              </div>
+
+              <div class="tv-tf-group">
+                <button class="tv-tf-btn active" data-tf="M20">M20</button>
+                <button class="tv-tf-btn" data-tf="M30">M30</button>
+                <button class="tv-tf-btn" data-tf="H1">H1</button>
+              </div>
+            </div>
+
+            <!-- Dynamic Crosshair / Real-Time Legend Readout -->
+            <div class="tv-legend-bar" id="tv-legend-bar">
+              <span class="tv-leg-cell time-cell mono" id="tv-leg-time">--:-- --</span>
+              <span class="tv-leg-cell"><span class="leg-key">O:</span> <span class="mono" id="tv-leg-open">--</span></span>
+              <span class="tv-leg-cell"><span class="leg-key">H:</span> <span class="mono" id="tv-leg-high">--</span></span>
+              <span class="tv-leg-cell"><span class="leg-key">L:</span> <span class="mono" id="tv-leg-low">--</span></span>
+              <span class="tv-leg-cell"><span class="leg-key">C:</span> <span class="mono" id="tv-leg-close">--</span></span>
+              <span class="tv-leg-cell tv-leg-ma" id="tv-leg-ma-wrap">
+                <span class="leg-swatch ma-swatch"></span>
+                <span class="leg-key">200 MA:</span>
+                <span class="mono" id="tv-leg-ma">--</span>
+              </span>
+              <span class="tv-leg-cell tv-leg-mvp" id="tv-leg-mvp-wrap">
+                <span class="leg-swatch mvp-swatch"></span>
+                <span class="leg-key">Middle Volume:</span>
+                <span class="mono" id="tv-leg-mvp">--</span>
+              </span>
+              <span class="tv-leg-cell tv-leg-delta" id="tv-leg-delta-wrap">
+                <span class="leg-key">Activity Delta:</span>
+                <span class="mono" id="tv-leg-delta">--</span>
+              </span>
+              <span class="tv-leg-cell tv-leg-ratio" id="tv-leg-ratio-wrap">
+                <span class="leg-key">Sentiment Ratio:</span>
+                <span class="mono" id="tv-leg-ratio">--</span>
+              </span>
+            </div>
+
+            <!-- Indicator Visibility Toggles & Controls -->
+            <div class="tv-toolbar-right">
+              <label class="tv-toggle-label" title="Toggle 200 Moving Average line">
+                <input type="checkbox" id="tv-chk-ma" checked>
+                <span class="tv-toggle-chip ma-chip">200 MA</span>
+              </label>
+
+              <label class="tv-toggle-label" title="Toggle Middle Volume line">
+                <input type="checkbox" id="tv-chk-mvp" checked>
+                <span class="tv-toggle-chip mvp-chip">Middle Volume</span>
+              </label>
+
+              <button id="tv-btn-fit" class="tv-action-btn" title="Reset Zoom and Fit All Bars (TradingView)">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg>
+                <span>Fit Content</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- 3 SYNCHRONIZED TRADINGVIEW PANES -->
+          <div class="tv-panes-stack">
+
+            <!-- PANE 1: MAIN CANDLESTICKS + 200 MA + MIDDLE VOLUME -->
+            <div class="tv-pane-card tv-main-pane">
+              <div class="tv-pane-header">
+                <div class="tv-pane-title">
+                  <span class="pane-badge">MAIN CHART</span>
+                  <span class="pane-name">Price Action &bull; 200 MA (Red) &bull; Middle Volume (Blue)</span>
+                </div>
+                <div class="tv-pane-hint">🖱️ Drag to pan &bull; Scroll to zoom &bull; Drag scales to resize</div>
+              </div>
+              <div id="tv-chart-main" class="tv-chart-container main-height"></div>
+            </div>
+
+            <!-- PANE 2: TRADING ACTIVITY DELTA (HISTOGRAM) -->
+            <div class="tv-pane-card tv-sub-pane">
+              <div class="tv-pane-header">
+                <div class="tv-pane-title">
+                  <span class="pane-badge badge-green">ACTIVITY DELTA</span>
+                  <span class="pane-name">Trading Activity Delta (Green = Aggressive Buyers &bull; Red = Aggressive Sellers)</span>
+                </div>
+                <div class="tv-pane-zero-guide">Baseline: 0.00</div>
+              </div>
+              <div id="tv-chart-delta" class="tv-chart-container sub-height"></div>
+            </div>
+
+            <!-- PANE 3: SENTIMENT RATIO (% LONGS LINE CHART) -->
+            <div class="tv-pane-card tv-sub-pane">
+              <div class="tv-pane-header">
+                <div class="tv-pane-title">
+                  <span class="pane-badge badge-purple">SENTIMENT RATIO</span>
+                  <span class="pane-name">Sentiment Ratio (% Longs) &bull; 40% (Green Threshold) &bull; 60% (Red Threshold)</span>
+                </div>
+                <div class="tv-pane-thresholds">
+                  <span class="thresh-pill green-thresh">40% Buy Bias</span>
+                  <span class="thresh-pill red-thresh">60% Sell Bias</span>
+                </div>
+              </div>
+              <div id="tv-chart-ratio" class="tv-chart-container sub-height"></div>
+            </div>
+
+          </div>
+
+          <!-- LIVE TIMEZONE & STREAMING FOOTER -->
+          <div class="tv-chart-footer-bar">
+            <div class="tv-footer-tz">
+              <span class="live-dot"></span>
+              <span>Live Feed: <strong>XAUUSDm (Gold Spot)</strong> &bull; All Time Coordinates in <strong>Bangladesh Standard Time (BST, UTC+6)</strong></span>
+            </div>
+            <div class="tv-footer-status" id="tv-sync-status-text">
+              TradingView Lightweight Engine Active &bull; 60 FPS Fluid Pan & Zoom
+            </div>
+          </div>
+
+        </section>
+      </div><!-- /view-live-chart -->
 
     </main>
 

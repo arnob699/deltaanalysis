@@ -59,7 +59,7 @@ def locate_mt5_files_dir() -> Path:
 def main():
     disable_quickedit()
     print("=====================================================================", flush=True)
-    print("   FXSSI Gold Delta — Oracle/PC to Render 1-Second Cloud Sync Agent", flush=True)
+    print("   Public Activity Delta — Oracle/PC to Render 1-Second Cloud Sync Agent", flush=True)
     print("=====================================================================", flush=True)
     
     global RENDER_URL
@@ -88,7 +88,9 @@ def main():
 
     last_sent_mtime = 0.0
     last_sync_clock = 0.0
+    last_candles_sync = 0.0
     fail_count = 0
+    candles_file = Path.cwd() / "backend" / "data" / "cached_candles.json"
 
     while True:
         try:
@@ -102,6 +104,15 @@ def main():
 
                     payload["heartbeat_epoch"] = int(now_t)
                     payload["mt5_online"] = True
+
+                    # Periodically attach live candles cache (every 10 seconds)
+                    if candles_file.exists() and (now_t - last_candles_sync >= 10.0):
+                        try:
+                            with open(candles_file, "r", encoding="utf-8") as cf:
+                                payload["candles_cache"] = json.load(cf)
+                            last_candles_sync = now_t
+                        except Exception:
+                            pass
 
                     res = session.post(sync_endpoint, json=payload, timeout=(3.0, 5.0))
                     if res.status_code == 200:

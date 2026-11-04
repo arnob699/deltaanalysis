@@ -18,6 +18,7 @@ let previousBidPrice = null;
 document.addEventListener('DOMContentLoaded', () => {
   initLiveBstClock();
   initEventListeners();
+  initViewSwitcher();
   initChart();
   fetchDeltaData();
   startPolling();
@@ -205,7 +206,12 @@ function closeDiagnosticsModal() {
 
 function startPolling() {
   if (pollInterval) clearInterval(pollInterval);
-  pollInterval = setInterval(fetchDeltaData, 1000); // 1-second live institutional refresh
+  pollInterval = setInterval(() => {
+    fetchDeltaData();
+    if (activeView === 'livechart' && isTvInitialized) {
+      loadCandlesData(activeTimeframe, false);
+    }
+  }, 1000); // 1-second live institutional refresh
 }
 
 async function fetchDeltaData() {
@@ -1059,4 +1065,546 @@ function showToast(message, type = 'info') {
     toast.style.transition = 'all 0.3s ease';
     setTimeout(() => toast.remove(), 300);
   }, 3500);
+}
+
+/* ==========================================================================
+   4. VIEW SWITCHER (ACTIVITY DELTA vs LIVE CHART)
+   ========================================================================== */
+
+let activeView = 'delta'; // 'delta' | 'livechart'
+
+function initViewSwitcher() {
+  const btnDelta = document.getElementById('nav-btn-delta');
+  const btnLiveChart = document.getElementById('nav-btn-livechart');
+  const viewDelta = document.getElementById('view-activity-delta');
+  const viewLiveChart = document.getElementById('view-live-chart');
+
+  function switchView(target) {
+    activeView = target;
+    if (target === 'delta') {
+      btnDelta?.classList.add('active');
+      btnLiveChart?.classList.remove('active');
+      viewDelta?.classList.remove('hidden');
+      viewLiveChart?.classList.add('hidden');
+    } else {
+      btnLiveChart?.classList.add('active');
+      btnDelta?.classList.remove('active');
+      viewLiveChart?.classList.remove('hidden');
+      viewDelta?.classList.add('hidden');
+
+      if (!isTvInitialized) {
+        initLiveChart();
+      } else {
+        resizeLiveCharts();
+      }
+      loadCandlesData(activeTimeframe, true);
+    }
+  }
+
+  btnDelta?.addEventListener('click', () => switchView('delta'));
+  btnLiveChart?.addEventListener('click', () => switchView('livechart'));
+}
+
+/* ==========================================================================
+   5. TRADINGVIEW LIGHTWEIGHT CHARTS LIVE ENGINE
+   ========================================================================== */
+
+let tvChartMain = null;
+let tvChartDelta = null;
+let tvChartRatio = null;
+
+let seriesCandles = null;
+let seriesMa200 = null;
+let seriesMvp = null;
+let seriesDelta = null;
+let seriesRatio = null;
+
+let activeTimeframe = 'M20';
+let isTvInitialized = false;
+let isSyncingRange = false;
+let latestBarRecord = null;
+let isCrosshairHovered = false;
+
+function initLiveChart() {
+  if (isTvInitialized) return;
+  if (typeof LightweightCharts === 'undefined') {
+    console.warn('[LiveChart] LightweightCharts library not loaded.');
+    return;
+  }
+
+  const containerMain = document.getElementById('tv-chart-main');
+  const containerDelta = document.getElementById('tv-chart-delta');
+  const containerRatio = document.getElementById('tv-chart-ratio');
+
+  if (!containerMain || !containerDelta || !containerRatio) {
+    console.warn('[LiveChart] One or more chart containers not found.');
+    return;
+  }
+
+  const baseTheme = {
+    layout: {
+      background: { type: 'solid', color: '#0f1420' },
+      textColor: '#94a3b8',
+      fontSize: 11,
+      fontFamily: "'JetBrains Mono', 'Inter', monospace",
+    },
+    grid: {
+      vertLines: { color: 'rgba(255, 255, 255, 0.04)' },
+      horzLines: { color: 'rgba(255, 255, 255, 0.04)' },
+    },
+    crosshair: {
+      mode: 1, // Magnet
+      vertLine: {
+        color: 'rgba(148, 163, 184, 0.45)',
+        width: 1,
+        style: 3, // Dashed
+        labelBackgroundColor: '#1e293b',
+      },
+      horzLine: {
+        color: 'rgba(148, 163, 184, 0.45)',
+        width: 1,
+        style: 3,
+        labelBackgroundColor: '#1e293b',
+      },
+    },
+    timeScale: {
+      borderColor: 'rgba(255, 255, 255, 0.08)',
+      timeVisible: true,
+      secondsVisible: false,
+    },
+    handleScroll: {
+      mouseWheel: true,
+      pressedMouseMove: true,
+      horzTouchDrag: true,
+      vertTouchDrag: true,
+    },
+    handleScale: {
+      axisPressedMouseMove: true,
+      mouseWheel: true,
+      pinch: true,
+    },
+  };
+
+  const chartWidth = containerMain.clientWidth || 900;
+
+  // 1. MAIN CANDLESTICK CHART
+  tvChartMain = LightweightCharts.createChart(containerMain, {
+    ...baseTheme,
+    width: chartWidth,
+    height: containerMain.clientHeight || 480,
+    rightPriceScale: {
+      borderColor: 'rgba(255, 255, 255, 0.08)',
+      scaleMargins: { top: 0.08, bottom: 0.12 },
+    },
+  });
+
+  seriesCandles = tvChartMain.addSeries(LightweightCharts.CandlestickSeries, {
+    upColor: '#10b981',
+    downColor: '#f43f5e',
+    borderUpColor: '#10b981',
+    borderDownColor: '#f43f5e',
+    wickUpColor: '#10b981',
+    wickDownColor: '#f43f5e',
+    title: 'XAUUSDm',
+  });
+
+  // 200 Moving Average (Red line)
+  seriesMa200 = tvChartMain.addSeries(LightweightCharts.LineSeries, {
+    color: '#ef4444',
+    lineWidth: 2,
+    crosshairMarkerVisible: true,
+    title: '200 MA',
+  });
+
+  // Middle Volume (Blue line)
+  seriesMvp = tvChartMain.addSeries(LightweightCharts.LineSeries, {
+    color: '#38bdf8',
+    lineWidth: 2,
+    crosshairMarkerVisible: true,
+    title: 'Middle Volume',
+  });
+
+  // 2. TRADING ACTIVITY DELTA HISTOGRAM CHART
+  tvChartDelta = LightweightCharts.createChart(containerDelta, {
+    ...baseTheme,
+    width: chartWidth,
+    height: containerDelta.clientHeight || 170,
+    rightPriceScale: {
+      borderColor: 'rgba(255, 255, 255, 0.08)',
+      scaleMargins: { top: 0.15, bottom: 0.15 },
+    },
+  });
+
+  seriesDelta = tvChartDelta.addSeries(LightweightCharts.HistogramSeries, {
+    base: 0,
+    title: 'Trading Activity Delta',
+  });
+
+  seriesDelta.createPriceLine({
+    price: 0,
+    color: '#475569',
+    lineWidth: 1,
+    lineStyle: 2,
+    axisLabelVisible: true,
+    title: '0.00',
+  });
+
+  // 3. SENTIMENT RATIO LINE CHART
+  tvChartRatio = LightweightCharts.createChart(containerRatio, {
+    ...baseTheme,
+    width: chartWidth,
+    height: containerRatio.clientHeight || 170,
+    rightPriceScale: {
+      borderColor: 'rgba(255, 255, 255, 0.08)',
+      scaleMargins: { top: 0.15, bottom: 0.15 },
+    },
+  });
+
+  seriesRatio = tvChartRatio.addSeries(LightweightCharts.LineSeries, {
+    color: '#cbd5e1',
+    lineWidth: 2,
+    crosshairMarkerVisible: true,
+    title: 'Sentiment Ratio (% Longs)',
+  });
+
+  seriesRatio.createPriceLine({
+    price: 60.0,
+    color: '#f43f5e',
+    lineWidth: 1,
+    lineStyle: 2,
+    axisLabelVisible: true,
+    title: '60% Sell Bias',
+  });
+
+  seriesRatio.createPriceLine({
+    price: 40.0,
+    color: '#10b981',
+    lineWidth: 1,
+    lineStyle: 2,
+    axisLabelVisible: true,
+    title: '40% Buy Bias',
+  });
+
+  seriesRatio.createPriceLine({
+    price: 50.0,
+    color: '#475569',
+    lineWidth: 1,
+    lineStyle: 3,
+    axisLabelVisible: false,
+  });
+
+  // LINK TIME SCALES FOR ZERO-INTERRUPTION SYNCHRONIZATION
+  linkChartsTimeScale([tvChartMain, tvChartDelta, tvChartRatio]);
+
+  // LINK CROSSHAIRS AND DYNAMIC READOUT
+  setupCrosshairSync();
+
+  // ATTACH CONTROLS LISTENERS
+  setupChartControls();
+
+  // RESPONSIVE RESIZE OBSERVER
+  setupResizeObserver();
+
+  isTvInitialized = true;
+}
+
+function linkChartsTimeScale(charts) {
+  charts.forEach(chart => {
+    chart.timeScale().subscribeVisibleLogicalRangeChange(range => {
+      if (isSyncingRange || !range) return;
+      isSyncingRange = true;
+      charts.forEach(other => {
+        if (other !== chart) {
+          other.timeScale().setVisibleLogicalRange(range);
+        }
+      });
+      isSyncingRange = false;
+    });
+  });
+}
+
+function setupCrosshairSync() {
+  const charts = [
+    { chart: tvChartMain, role: 'main' },
+    { chart: tvChartDelta, role: 'delta' },
+    { chart: tvChartRatio, role: 'ratio' },
+  ];
+
+  charts.forEach(({ chart }) => {
+    chart.subscribeCrosshairMove(param => {
+      if (!param || !param.time || !param.seriesData) {
+        isCrosshairHovered = false;
+        renderLatestToLegend();
+        return;
+      }
+      isCrosshairHovered = true;
+      renderParamToLegend(param);
+    });
+  });
+}
+
+function renderParamToLegend(param) {
+  const cData = param.seriesData.get(seriesCandles);
+  const maData = param.seriesData.get(seriesMa200);
+  const mvpData = param.seriesData.get(seriesMvp);
+  const deltaData = param.seriesData.get(seriesDelta);
+  const ratioData = param.seriesData.get(seriesRatio);
+
+  if (param.time) {
+    const tEl = document.getElementById('tv-leg-time');
+    if (tEl) {
+      const d = new Date(param.time * 1000);
+      const bstTime = new Date(d.getTime() + (6 * 3600000));
+      tEl.textContent = formatTimeBst(bstTime);
+    }
+  }
+
+  if (cData) {
+    const op = document.getElementById('tv-leg-open');
+    const hi = document.getElementById('tv-leg-high');
+    const lo = document.getElementById('tv-leg-low');
+    const cl = document.getElementById('tv-leg-close');
+    if (op && cData.open !== undefined) op.textContent = cData.open.toFixed(2);
+    if (hi && cData.high !== undefined) hi.textContent = cData.high.toFixed(2);
+    if (lo && cData.low !== undefined) lo.textContent = cData.low.toFixed(2);
+    if (cl && cData.close !== undefined) cl.textContent = cData.close.toFixed(2);
+  }
+
+  if (maData && maData.value !== undefined) {
+    const el = document.getElementById('tv-leg-ma');
+    if (el) el.textContent = maData.value.toFixed(2);
+  }
+
+  if (mvpData && mvpData.value !== undefined) {
+    const el = document.getElementById('tv-leg-mvp');
+    if (el) el.textContent = mvpData.value.toFixed(2);
+  }
+
+  if (deltaData && deltaData.value !== undefined) {
+    const dVal = deltaData.value;
+    const dEl = document.getElementById('tv-leg-delta');
+    if (dEl) {
+      dEl.textContent = (dVal > 0 ? '+' : '') + dVal.toFixed(2) + '%';
+      dEl.className = 'mono ' + (dVal >= 0 ? 'val-pos' : 'val-neg');
+    }
+  }
+
+  if (ratioData && ratioData.value !== undefined) {
+    const rEl = document.getElementById('tv-leg-ratio');
+    if (rEl) rEl.textContent = ratioData.value.toFixed(1) + '% Longs';
+  }
+}
+
+function renderLatestToLegend() {
+  if (!latestBarRecord) return;
+  const b = latestBarRecord;
+  const tEl = document.getElementById('tv-leg-time');
+  if (tEl && b.time) {
+    const d = new Date(b.time * 1000);
+    const bstTime = new Date(d.getTime() + (6 * 3600000));
+    tEl.textContent = formatTimeBst(bstTime);
+  }
+
+  const op = document.getElementById('tv-leg-open');
+  const hi = document.getElementById('tv-leg-high');
+  const lo = document.getElementById('tv-leg-low');
+  const cl = document.getElementById('tv-leg-close');
+  if (op && b.open) op.textContent = b.open.toFixed(2);
+  if (hi && b.high) hi.textContent = b.high.toFixed(2);
+  if (lo && b.low) lo.textContent = b.low.toFixed(2);
+  if (cl && b.close) cl.textContent = b.close.toFixed(2);
+
+  const maEl = document.getElementById('tv-leg-ma');
+  if (maEl && b.ma200) maEl.textContent = b.ma200.toFixed(2);
+
+  const mvpEl = document.getElementById('tv-leg-mvp');
+  if (mvpEl && b.mvp) mvpEl.textContent = b.mvp.toFixed(2);
+
+  if (b.delta !== undefined) {
+    const dEl = document.getElementById('tv-leg-delta');
+    if (dEl) {
+      dEl.textContent = (b.delta > 0 ? '+' : '') + b.delta.toFixed(2) + '%';
+      dEl.className = 'mono ' + (b.delta >= 0 ? 'val-pos' : 'val-neg');
+    }
+  }
+
+  if (b.ratio !== undefined) {
+    const rEl = document.getElementById('tv-leg-ratio');
+    if (rEl) rEl.textContent = b.ratio.toFixed(1) + '% Longs';
+  }
+}
+
+function formatTimeBst(d) {
+  let h = d.getUTCHours();
+  const m = String(d.getUTCMinutes()).padStart(2, '0');
+  const ampm = h >= 12 ? 'PM' : 'AM';
+  h = h % 12 || 12;
+  return `${String(h).padStart(2, '0')}:${m} ${ampm} BST`;
+}
+
+function setupChartControls() {
+  // Timeframe buttons
+  document.querySelectorAll('.tv-tf-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.tv-tf-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      activeTimeframe = btn.dataset.tf || 'M20';
+      loadCandlesData(activeTimeframe, true);
+    });
+  });
+
+  // Toggles
+  const chkMa = document.getElementById('tv-chk-ma');
+  if (chkMa) {
+    chkMa.addEventListener('change', e => {
+      if (seriesMa200) seriesMa200.applyOptions({ visible: e.target.checked });
+      const wrap = document.getElementById('tv-leg-ma-wrap');
+      if (wrap) wrap.style.opacity = e.target.checked ? '1' : '0.35';
+    });
+  }
+
+  const chkMvp = document.getElementById('tv-chk-mvp');
+  if (chkMvp) {
+    chkMvp.addEventListener('change', e => {
+      if (seriesMvp) seriesMvp.applyOptions({ visible: e.target.checked });
+      const wrap = document.getElementById('tv-leg-mvp-wrap');
+      if (wrap) wrap.style.opacity = e.target.checked ? '1' : '0.35';
+    });
+  }
+
+  // Fit view
+  const btnFit = document.getElementById('tv-btn-fit');
+  if (btnFit) {
+    btnFit.addEventListener('click', () => {
+      if (tvChartMain) tvChartMain.timeScale().fitContent();
+    });
+  }
+}
+
+function setupResizeObserver() {
+  const container = document.getElementById('tv-chart-main');
+  if (!container) return;
+  const observer = new ResizeObserver(entries => {
+    for (const entry of entries) {
+      const width = entry.contentRect.width;
+      if (width > 50) {
+        if (tvChartMain) tvChartMain.applyOptions({ width });
+        if (tvChartDelta) tvChartDelta.applyOptions({ width });
+        if (tvChartRatio) tvChartRatio.applyOptions({ width });
+      }
+    }
+  });
+  observer.observe(container);
+}
+
+function resizeLiveCharts() {
+  const container = document.getElementById('tv-chart-main');
+  if (!container) return;
+  const width = container.clientWidth;
+  if (width > 50) {
+    if (tvChartMain) tvChartMain.applyOptions({ width });
+    if (tvChartDelta) tvChartDelta.applyOptions({ width });
+    if (tvChartRatio) tvChartRatio.applyOptions({ width });
+  }
+}
+
+async function loadCandlesData(timeframe = 'M20', isInitial = false) {
+  if (!isTvInitialized && activeView !== 'livechart') return;
+  try {
+    const res = await fetch(`/api/candles?symbol=XAUUSDm&timeframe=${timeframe}&count=500`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    const candles = data.candles || [];
+    if (candles.length === 0) return;
+
+    latestBarRecord = candles[candles.length - 1];
+
+    if (isInitial || !seriesCandles) {
+      // Full dataset replacement
+      const candleBars = [];
+      const maBars = [];
+      const mvpBars = [];
+      const deltaBars = [];
+      const ratioBars = [];
+
+      for (const c of candles) {
+        candleBars.push({
+          time: c.time,
+          open: c.open,
+          high: c.high,
+          low: c.low,
+          close: c.close,
+        });
+
+        if (c.ma200 !== null && c.ma200 !== undefined) {
+          maBars.push({ time: c.time, value: c.ma200 });
+        }
+
+        if (c.mvp !== null && c.mvp !== undefined) {
+          mvpBars.push({ time: c.time, value: c.mvp });
+        }
+
+        deltaBars.push({
+          time: c.time,
+          value: c.delta || 0.0,
+          color: (c.delta >= 0) ? '#10b981' : '#f43f5e',
+        });
+
+        if (c.ratio !== null && c.ratio !== undefined) {
+          ratioBars.push({ time: c.time, value: c.ratio });
+        }
+      }
+
+      if (seriesCandles) seriesCandles.setData(candleBars);
+      if (seriesMa200) seriesMa200.setData(maBars);
+      if (seriesMvp) seriesMvp.setData(mvpBars);
+      if (seriesDelta) seriesDelta.setData(deltaBars);
+      if (seriesRatio) seriesRatio.setData(ratioBars);
+
+      if (tvChartMain) tvChartMain.timeScale().fitContent();
+    } else {
+      // Incremental real-time update of latest bar (Fluid zero-interruption pan/zoom!)
+      const c = latestBarRecord;
+      if (seriesCandles) {
+        seriesCandles.update({
+          time: c.time,
+          open: c.open,
+          high: c.high,
+          low: c.low,
+          close: c.close,
+        });
+      }
+
+      if (seriesMa200 && c.ma200 !== null && c.ma200 !== undefined) {
+        seriesMa200.update({ time: c.time, value: c.ma200 });
+      }
+
+      if (seriesMvp && c.mvp !== null && c.mvp !== undefined) {
+        seriesMvp.update({ time: c.time, value: c.mvp });
+      }
+
+      if (seriesDelta) {
+        seriesDelta.update({
+          time: c.time,
+          value: c.delta || 0.0,
+          color: (c.delta >= 0) ? '#10b981' : '#f43f5e',
+        });
+      }
+
+      if (seriesRatio && c.ratio !== null && c.ratio !== undefined) {
+        seriesRatio.update({ time: c.time, value: c.ratio });
+      }
+    }
+
+    if (!isCrosshairHovered) {
+      renderLatestToLegend();
+    }
+
+    const statusEl = document.getElementById('tv-sync-status-text');
+    if (statusEl && latestBarRecord) {
+      statusEl.textContent = `Live Stream Synchronized • XAUUSDm at $${latestBarRecord.close.toFixed(2)} (${timeframe})`;
+    }
+  } catch (err) {
+    console.warn('[LiveChart] Candles fetch notice:', err);
+  }
 }
