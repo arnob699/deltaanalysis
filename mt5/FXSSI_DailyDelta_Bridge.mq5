@@ -3,8 +3,8 @@
 //|                                  Copyright 2026, Delta Analyse   |
 //+------------------------------------------------------------------+
 #property copyright   "Delta Analyse"
-#property version     "1.110"
-#property description "Public Activity Delta Bridge for Gold (Multi-Day History & BST 12-Hour)"
+#property version     "1.120"
+#property description "Public Activity Delta Bridge for Gold (Multi-Day History & BST 12-Hour & Real FXSSI Sentiment)"
 
 //+------------------------------------------------------------------+
 //| Inputs                                                           |
@@ -12,6 +12,7 @@
 input group "---- Gold Symbol & Indicator Binding ----"
 input string   InpGoldSymbol          = "XAUUSDm";                          // Target Gold Symbol (Auto-detects if empty)
 input string   InpIndicatorPath       = "FXSSI.com\\FXSSI.TradingActivity"; // Internal Activity Indicator Path
+input string   InpRatiosPath          = "FXSSI.com\\FXSSI.Ratios";          // Internal Ratios Indicator Path
 input bool     InpReuseChartIndicator = true;                               // Reuse Active Chart Indicator (Avoids duplicates)
 
 input group "---- Multi-Day History & Timezone Settings ----"
@@ -50,6 +51,8 @@ struct DayData
 //+------------------------------------------------------------------+
 int      g_hIndicator        = INVALID_HANDLE;
 bool     g_indicator_is_chart= false;
+int      g_hRatios           = INVALID_HANDLE;
+bool     g_ratios_is_chart   = false;
 string   g_gold_symbol       = "XAUUSDm";
 datetime g_last_m20_bar_time = 0;
 datetime g_last_day_open     = 0;
@@ -61,6 +64,7 @@ int      g_cached_history_days_count = 0;
 // Forward declarations
 string   ResolveGoldSymbol();
 int      BindActivityIndicator();
+int      BindRatiosIndicator();
 void     RecalculateAndExport(string update_type, bool full_history_refresh);
 DayData  ProcessSingleDay(int day_index, datetime now_current, int bst_offset);
 string   FormatTime12(datetime dt);
@@ -78,8 +82,8 @@ void     UpdateChartButton(string text, color bg_col);
 int OnInit()
 {
    Print("===============================================================");
-   Print("[Public Activity Delta] Initializing Gold Bridge v1.110");
-   Print("[Public Activity Delta] 12-Hour Bangladesh Time (BST) & Multi-Day Mode Active");
+   Print("[Public Activity Delta] Initializing Gold Bridge v1.120");
+   Print("[Public Activity Delta] 12-Hour Bangladesh Time (BST), Real FXSSI Sentiment & Dynamic Bars Active");
    
    bool dlls_allowed = (bool)TerminalInfoInteger(TERMINAL_DLLS_ALLOWED);
    if(!dlls_allowed)
@@ -92,6 +96,7 @@ int OnInit()
    SymbolSelect(g_gold_symbol, true);
    
    g_hIndicator = BindActivityIndicator();
+   g_hRatios    = BindRatiosIndicator();
    
    if(InpShowChartButton)
    {
@@ -117,6 +122,12 @@ void OnDeinit(const int reason)
       IndicatorRelease(g_hIndicator);
    }
    g_hIndicator = INVALID_HANDLE;
+   
+   if(g_hRatios != INVALID_HANDLE && !g_ratios_is_chart)
+   {
+      IndicatorRelease(g_hRatios);
+   }
+   g_hRatios = INVALID_HANDLE;
    
    ObjectDelete(0, g_button_name);
    ChartRedraw();
@@ -162,7 +173,7 @@ void OnTimer()
       return;
    }
    
-   // 3. Check if a new M20 bar formed
+   // 3. Check if a new bar formed
    datetime current_time = iTime(g_gold_symbol, _Period, 0);
    if(current_time != 0 && current_time != g_last_m20_bar_time)
    {
@@ -171,31 +182,28 @@ void OnTimer()
       return;
    }
    
-   // 4. Heartbeat update
+   // 4. Heartbeat update (live prices & current bar progression)
    RecalculateAndExport("HEARTBEAT", false);
 }
 
 //+------------------------------------------------------------------+
 //| ChartEvent function                                              |
 //+------------------------------------------------------------------+
-void OnChartEvent(const int id,
-                  const long &lparam,
-                  const double &dparam,
-                  const string &sparam)
+void OnChartEvent(const int id, const long &lparam, const double &dparam, const string &sparam)
 {
    if(id == CHARTEVENT_OBJECT_CLICK && sparam == g_button_name)
    {
-      Print("[Public Activity Delta] Manual chart button clicked. Rescanning Gold deltas...");
-      ObjectSetInteger(0, g_button_name, OBJPROP_STATE, false);
-      UpdateChartButton("SCANNING DELTA...", C'220,130,0');
+      Print("[Public Activity Delta] Refresh button clicked on chart. Initiating multi-day scan...");
+      UpdateChartButton("UPDATING...", C'220,130,0');
       RecalculateAndExport("MANUAL_CHART_CLICK", true);
       UpdateChartButton("REFRESH DELTA (BST)", C'24,140,80');
+      ObjectSetInteger(0, g_button_name, OBJPROP_STATE, false);
       ChartRedraw();
    }
 }
 
 //+------------------------------------------------------------------+
-//| Resolve Gold Symbol on Broker                                    |
+//| Auto-detect and validate Gold Symbol                             |
 //+------------------------------------------------------------------+
 string ResolveGoldSymbol()
 {
@@ -219,7 +227,7 @@ string ResolveGoldSymbol()
 }
 
 //+------------------------------------------------------------------+
-//| Bind to Activity Indicator on Chart                             |
+//| Bind to Trading Activity Indicator on Chart                      |
 //+------------------------------------------------------------------+
 int BindActivityIndicator()
 {
@@ -245,6 +253,66 @@ int BindActivityIndicator()
          }
       }
       
+      if(total_windows >= 2)
+      {
+         int ind1_count = ChartIndicatorsTotal(0, 1);
+         for(int i = 0; i < ind1_count; i++)
+         {
+            string name1 = ChartIndicatorName(0, 1, i);
+            int h1 = ChartIndicatorGet(0, 1, name1);
+            if(h1 != INVALID_HANDLE)
+            {
+               PrintFormat("[Public Activity Delta] Linked to Subwindow 1 Indicator: '%s' (Handle=%d)", name1, h1);
+               g_indicator_is_chart = true;
+               return h1;
+            }
+         }
+      }
+   }
+   
+   ResetLastError();
+   int h = iCustom(g_gold_symbol, _Period, InpIndicatorPath);
+   if(h == INVALID_HANDLE) h = iCustom(g_gold_symbol, _Period, "FXSSI.TradingActivity");
+   if(h == INVALID_HANDLE) h = iCustom(g_gold_symbol, _Period, "FXSSI.com\\TradingActivity");
+   
+   if(h != INVALID_HANDLE)
+   {
+      PrintFormat("[Public Activity Delta] Created indicator handle on %s (Handle=%d)", g_gold_symbol, h);
+      g_indicator_is_chart = false;
+      return h;
+   }
+   
+   Print("[Public Activity Delta] Note: Activity Indicator not found yet. Waiting for chart attachment.");
+   return INVALID_HANDLE;
+}
+
+//+------------------------------------------------------------------+
+//| Bind to Sentiment Ratio Indicator on Chart                       |
+//+------------------------------------------------------------------+
+int BindRatiosIndicator()
+{
+   if(InpReuseChartIndicator)
+   {
+      int total_windows = (int)ChartGetInteger(0, CHART_WINDOWS_TOTAL);
+      for(int w = 0; w < total_windows; w++)
+      {
+         int total_ind = ChartIndicatorsTotal(0, w);
+         for(int i = 0; i < total_ind; i++)
+         {
+            string name = ChartIndicatorName(0, w, i);
+            if(StringFind(name, "Ratios") >= 0 || StringFind(name, "Ratio") >= 0 || StringFind(name, "CurrentRatio") >= 0)
+            {
+               int h = ChartIndicatorGet(0, w, name);
+               if(h != INVALID_HANDLE)
+               {
+                  PrintFormat("[Public Activity Delta] Linked directly to live Ratios Indicator in Window %d: '%s' (Handle=%d)", w, name, h);
+                  g_ratios_is_chart = true;
+                  return h;
+               }
+            }
+         }
+      }
+      
       if(total_windows >= 3)
       {
          int ind2_count = ChartIndicatorsTotal(0, 2);
@@ -254,8 +322,8 @@ int BindActivityIndicator()
             int h2 = ChartIndicatorGet(0, 2, name2);
             if(h2 != INVALID_HANDLE)
             {
-               PrintFormat("[Public Activity Delta] Linked to Subwindow 2 Indicator: '%s' (Handle=%d)", name2, h2);
-               g_indicator_is_chart = true;
+               PrintFormat("[Public Activity Delta] Linked to Subwindow 2 Indicator as Ratios: '%s' (Handle=%d)", name2, h2);
+               g_ratios_is_chart = true;
                return h2;
             }
          }
@@ -263,20 +331,19 @@ int BindActivityIndicator()
    }
    
    ResetLastError();
-   int h = iCustom(g_gold_symbol, _Period, InpIndicatorPath);
-   if(h == INVALID_HANDLE)
-   {
-      h = iCustom(g_gold_symbol, _Period, "FXSSI.TradingActivity");
-   }
+   int h = iCustom(g_gold_symbol, _Period, InpRatiosPath);
+   if(h == INVALID_HANDLE) h = iCustom(g_gold_symbol, _Period, "FXSSI.Ratios");
+   if(h == INVALID_HANDLE) h = iCustom(g_gold_symbol, _Period, "FXSSI.com\\FXSSI.CurrentRatio");
+   if(h == INVALID_HANDLE) h = iCustom(g_gold_symbol, _Period, "FXSSI.CurrentRatio");
    
    if(h != INVALID_HANDLE)
    {
-      PrintFormat("[Public Activity Delta] Created indicator handle on %s (Handle=%d)", g_gold_symbol, h);
-      g_indicator_is_chart = false;
+      PrintFormat("[Public Activity Delta] Created Ratios handle on %s (Handle=%d)", g_gold_symbol, h);
+      g_ratios_is_chart = false;
       return h;
    }
    
-   Print("[Public Activity Delta] Note: Indicator not found yet. Waiting for chart attachment.");
+   Print("[Public Activity Delta] Note: Ratios Indicator not found yet. Waiting for chart attachment.");
    return INVALID_HANDLE;
 }
 
@@ -366,41 +433,54 @@ DayData ProcessSingleDay(int day_index, datetime now_current, int bst_offset)
       if(day_index == 0) day_open_broker = now_current - (now_current % 86400);
       else return d;
    }
+   datetime day_close_broker = day_open_broker + 86400;
    
    datetime day_open_bst = day_open_broker + bst_offset;
    d.date_broker  = TimeToString(day_open_broker, TIME_DATE);
    d.date_bst     = TimeToString(day_open_bst, TIME_DATE);
    d.day_name     = GetDayOfWeekName(day_open_bst);
    
-   int expected_bars = 72;
-   if(day_index == 0)
+   // Identify actual chart bars within this day on the active timeframe
+   int s_start = iBarShift(g_gold_symbol, _Period, day_open_broker, false);
+   while(s_start >= 0 && iTime(g_gold_symbol, _Period, s_start) < day_open_broker)
    {
-      int seconds_today = (int)(now_current - day_open_broker);
-      if(seconds_today < 0) seconds_today = 0;
-      expected_bars = (seconds_today / 1200) + 1;
-      if(expected_bars > 72) expected_bars = 72;
-      if(expected_bars < 1)  expected_bars = 1;
+      s_start--;
    }
-   d.total_bars = expected_bars;
+   
+   int s_end = 0;
+   if(day_index > 0)
+   {
+      s_end = iBarShift(g_gold_symbol, _Period, day_close_broker - 1, false);
+      if(s_end < 0) s_end = 0;
+   }
+   
+   if(s_start < s_end)
+   {
+      int temp = s_start;
+      s_start = s_end;
+      s_end = temp;
+   }
+   
+   int bars_in_day = (s_start >= s_end) ? (s_start - s_end + 1) : 0;
+   d.total_bars = bars_in_day;
    
    double run_inc_pos = 0.0, run_inc_neg = 0.0;
    double run_dec_pos = 0.0, run_dec_neg = 0.0;
    
-   for(int k = 0; k < expected_bars; k++)
+   // Iterate sequentially from oldest bar of day down to newest bar
+   for(int shift = s_start; shift >= s_end; shift--)
    {
-      datetime bar_time_broker = day_open_broker + k * 1200;
-      if(day_index == 0 && bar_time_broker > now_current) break;
+      datetime bar_time_broker = iTime(g_gold_symbol, _Period, shift);
+      if(bar_time_broker < day_open_broker || bar_time_broker >= day_close_broker) continue;
+      if(day_index == 0 && bar_time_broker > now_current) continue;
       
       datetime bar_time_bst = bar_time_broker + bst_offset;
       
-      int shift = iBarShift(g_gold_symbol, _Period, bar_time_broker, true);
-      if(shift == -1) shift = iBarShift(g_gold_symbol, _Period, bar_time_broker, false);
-      if(shift == -1) continue;
-      
       double inc_delta = 0.0;
       double dec_delta = 0.0;
-      bool has_reading = false;
+      bool has_activity = false;
       
+      // 1. Extract Trading Activity Buffers
       if(g_hIndicator != INVALID_HANDLE)
       {
          double b_inc_pos[], b_inc_neg[], b_inc_buy[], b_inc_sell[];
@@ -410,19 +490,19 @@ DayData ProcessSingleDay(int day_index, datetime now_current, int bst_offset)
          if(CopyBuffer(g_hIndicator, 4, shift, 1, b_inc_pos) > 0 && b_inc_pos[0] != EMPTY_VALUE && MathIsValidNumber(b_inc_pos[0]) && b_inc_pos[0] > 0.0001 && b_inc_pos[0] <= 100.0)
          {
             inc_delta = b_inc_pos[0];
-            has_reading = true;
+            has_activity = true;
          }
          else if(CopyBuffer(g_hIndicator, 5, shift, 1, b_inc_neg) > 0 && b_inc_neg[0] != EMPTY_VALUE && MathIsValidNumber(b_inc_neg[0]) && MathAbs(b_inc_neg[0]) > 0.0001 && MathAbs(b_inc_neg[0]) <= 100.0)
          {
             inc_delta = (b_inc_neg[0] > 0) ? -b_inc_neg[0] : b_inc_neg[0];
-            has_reading = true;
+            has_activity = true;
          }
          else if(CopyBuffer(g_hIndicator, 0, shift, 1, b_inc_buy) > 0 && CopyBuffer(g_hIndicator, 1, shift, 1, b_inc_sell) > 0)
          {
-            if(b_inc_buy[0] != EMPTY_VALUE && b_inc_sell[0] != EMPTY_VALUE && MathAbs(b_inc_buy[0]) <= 100.0 && MathAbs(b_inc_sell[0]) <= 100.0 && (b_inc_buy[0] > 0.0 || b_inc_sell[0] > 0.0))
+            if(b_inc_buy[0] != EMPTY_VALUE && b_inc_sell[0] != EMPTY_VALUE && MathIsValidNumber(b_inc_buy[0]) && MathIsValidNumber(b_inc_sell[0]) && MathAbs(b_inc_buy[0]) <= 100.0 && MathAbs(b_inc_sell[0]) <= 100.0 && (b_inc_buy[0] > 0.0 || b_inc_sell[0] > 0.0))
             {
                inc_delta = b_inc_buy[0] - b_inc_sell[0];
-               has_reading = true;
+               has_activity = true;
             }
          }
          
@@ -430,24 +510,55 @@ DayData ProcessSingleDay(int day_index, datetime now_current, int bst_offset)
          if(CopyBuffer(g_hIndicator, 6, shift, 1, b_dec_pos) > 0 && b_dec_pos[0] != EMPTY_VALUE && MathIsValidNumber(b_dec_pos[0]) && b_dec_pos[0] > 0.0001 && b_dec_pos[0] <= 100.0)
          {
             dec_delta = b_dec_pos[0];
-            has_reading = true;
+            has_activity = true;
          }
          else if(CopyBuffer(g_hIndicator, 7, shift, 1, b_dec_neg) > 0 && b_dec_neg[0] != EMPTY_VALUE && MathIsValidNumber(b_dec_neg[0]) && MathAbs(b_dec_neg[0]) > 0.0001 && MathAbs(b_dec_neg[0]) <= 100.0)
          {
             dec_delta = (b_dec_neg[0] > 0) ? -b_dec_neg[0] : b_dec_neg[0];
-            has_reading = true;
+            has_activity = true;
          }
          else if(CopyBuffer(g_hIndicator, 2, shift, 1, b_dec_buy) > 0 && CopyBuffer(g_hIndicator, 3, shift, 1, b_dec_sell) > 0)
          {
-            if(b_dec_buy[0] != EMPTY_VALUE && b_dec_sell[0] != EMPTY_VALUE && MathAbs(b_dec_buy[0]) <= 100.0 && MathAbs(b_dec_sell[0]) <= 100.0 && (b_dec_buy[0] > 0.0 || b_dec_sell[0] > 0.0))
+            if(b_dec_buy[0] != EMPTY_VALUE && b_dec_sell[0] != EMPTY_VALUE && MathIsValidNumber(b_dec_buy[0]) && MathIsValidNumber(b_dec_sell[0]) && MathAbs(b_dec_buy[0]) <= 100.0 && MathAbs(b_dec_sell[0]) <= 100.0 && (b_dec_buy[0] > 0.0 || b_dec_sell[0] > 0.0))
             {
                dec_delta = b_dec_buy[0] - b_dec_sell[0];
-               has_reading = true;
+               has_activity = true;
             }
          }
       }
       
-      if(has_reading) d.valid_bars++;
+      // 2. Extract Real FXSSI.Ratios sentiment ratio (% Longs)
+      double ratio_val = 50.0;
+      bool has_ratio = false;
+      if(g_hRatios != INVALID_HANDLE)
+      {
+         double b_ratio[];
+         if(CopyBuffer(g_hRatios, 0, shift, 1, b_ratio) > 0)
+         {
+            if(b_ratio[0] != EMPTY_VALUE && MathIsValidNumber(b_ratio[0]) && b_ratio[0] > 0.0 && b_ratio[0] < 100.0)
+            {
+               ratio_val = b_ratio[0];
+               has_ratio = true;
+            }
+         }
+         if(!has_ratio)
+         {
+            for(int b = 1; b < 6; b++)
+            {
+               if(CopyBuffer(g_hRatios, b, shift, 1, b_ratio) > 0)
+               {
+                  if(b_ratio[0] != EMPTY_VALUE && MathIsValidNumber(b_ratio[0]) && b_ratio[0] > 0.0 && b_ratio[0] < 100.0)
+                  {
+                     ratio_val = b_ratio[0];
+                     has_ratio = true;
+                     break;
+                  }
+               }
+            }
+         }
+      }
+      
+      if(has_activity || has_ratio) d.valid_bars++;
       
       if(inc_delta > 0.0)      run_inc_pos += inc_delta;
       else if(inc_delta < 0.0) run_inc_neg += inc_delta;
@@ -468,6 +579,7 @@ DayData ProcessSingleDay(int day_index, datetime now_current, int bst_offset)
          + "\"time_broker\":\"" + time_broker_hm + "\","
          + "\"timestamp\":\"" + ts_12_bst + "\","
          + "\"timestamp_broker\":\"" + ts_broker_full + "\","
+         + StringFormat("\"ratio\":%.2f,", ratio_val)
          + StringFormat("\"inc_20m\":%.4f,\"inc_cum_pos\":%.4f,\"inc_cum_neg\":%.4f,\"inc_running_net\":%.4f,", inc_delta, run_inc_pos, run_inc_neg, inc_net_running)
          + StringFormat("\"dec_20m\":%.4f,\"dec_cum_pos\":%.4f,\"dec_cum_neg\":%.4f,\"dec_running_net\":%.4f,", dec_delta, run_dec_pos, run_dec_neg, dec_net_running)
          + "\"behavior_tag\":\"" + behavior_tag + "\""
@@ -509,15 +621,20 @@ void RecalculateAndExport(string update_type, bool full_history_refresh)
    // Diagnostics setup
    bool terminal_connected = (bool)TerminalInfoInteger(TERMINAL_CONNECTED);
    bool dlls_allowed       = (bool)TerminalInfoInteger(TERMINAL_DLLS_ALLOWED);
-   bool indicator_found    = (g_hIndicator != INVALID_HANDLE);
-   bool data_ready         = false;
-   string error_message    = "";
    
    if(g_hIndicator == INVALID_HANDLE)
    {
       g_hIndicator = BindActivityIndicator();
-      indicator_found = (g_hIndicator != INVALID_HANDLE);
    }
+   if(g_hRatios == INVALID_HANDLE)
+   {
+      g_hRatios = BindRatiosIndicator();
+   }
+   
+   bool indicator_found = (g_hIndicator != INVALID_HANDLE);
+   bool ratios_found    = (g_hRatios != INVALID_HANDLE);
+   bool data_ready      = false;
+   string error_message = "";
    
    if(!dlls_allowed)
    {
@@ -538,13 +655,13 @@ void RecalculateAndExport(string update_type, bool full_history_refresh)
          data_ready = true;
          if(today_data.valid_bars < today_data.total_bars)
          {
-            error_message = StringFormat("Synchronizing Gold 20-minute history: %d of %d expected bars loaded.", today_data.valid_bars, today_data.total_bars);
+            error_message = StringFormat("Synchronizing Gold sentiment history: %d of %d expected bars loaded.", today_data.valid_bars, today_data.total_bars);
          }
       }
       else
       {
          data_ready = false;
-         error_message = "Synchronizing Gold 20-minute sentiment data...";
+         error_message = "Synchronizing Gold sentiment data...";
       }
    }
    
@@ -638,7 +755,7 @@ void RecalculateAndExport(string update_type, bool full_history_refresh)
    double gold_open = iOpen(g_gold_symbol, PERIOD_D1, 0);
    double gold_high = iHigh(g_gold_symbol, PERIOD_D1, 0);
    double gold_low  = iLow(g_gold_symbol, PERIOD_D1, 0);
-   if(gold_bid <= 0.0) gold_bid = iClose(g_gold_symbol, PERIOD_M20, 0);
+   if(gold_bid <= 0.0) gold_bid = iClose(g_gold_symbol, _Period, 0);
    if(gold_ask <= 0.0) gold_ask = gold_bid + 0.20;
    if(gold_open <= 0.0) gold_open = gold_bid;
    if(gold_high <= 0.0) gold_high = gold_bid;
@@ -653,7 +770,7 @@ void RecalculateAndExport(string update_type, bool full_history_refresh)
    json += StringFormat("  \"symbol\": \"%s\",\n", g_gold_symbol);
    json += "  \"asset\": \"GOLD\",\n";
    json += "  \"source\": \"Public Activity Delta Bridge\",\n";
-   json += "  \"period\": \"PERIOD_M20\",\n";
+   json += StringFormat("  \"period\": \"%s\",\n", EnumToString((ENUM_TIMEFRAMES)_Period));
    json += "  \"timezone\": \"Asia/Dhaka (BST, UTC+6)\",\n";
    json += "  \"time_format\": \"12-hour (hh:mm AM/PM)\",\n";
    json += StringFormat("  \"day_open_time\": \"%s\",\n", TimeToString(day_open, TIME_DATE|TIME_SECONDS));
@@ -683,9 +800,10 @@ void RecalculateAndExport(string update_type, bool full_history_refresh)
    json += StringFormat("    \"terminal_connected\": %s,\n", terminal_connected ? "true" : "false");
    json += StringFormat("    \"dlls_allowed\": %s,\n", dlls_allowed ? "true" : "false");
    json += StringFormat("    \"indicator_found\": %s,\n", indicator_found ? "true" : "false");
+   json += StringFormat("    \"ratios_found\": %s,\n", ratios_found ? "true" : "false");
    json += StringFormat("    \"data_ready\": %s,\n", data_ready ? "true" : "false");
-   json += StringFormat("    \"expected_m20_bars_today\": %d,\n", today_data.total_bars);
-   json += StringFormat("    \"valid_m20_bars_loaded\": %d,\n", today_data.valid_bars);
+   json += StringFormat("    \"expected_bars_today\": %d,\n", today_data.total_bars);
+   json += StringFormat("    \"valid_bars_loaded\": %d,\n", today_data.valid_bars);
    json += StringFormat("    \"history_days_loaded\": %d,\n", total_history_days);
    json += StringFormat("    \"error_message\": \"%s\"\n", error_message);
    json += "  },\n";
@@ -720,14 +838,14 @@ void RecalculateAndExport(string update_type, bool full_history_refresh)
       FileClose(file_handle);
       if(full_history_refresh || update_type == "INIT_STARTUP" || update_type == "WEB_REFRESH" || update_type == "MANUAL_CHART_CLICK")
       {
-         PrintFormat("[Public Activity Delta] Exported %d days (%d today bars) to %s (IncNet=%.2f, DecNet=%.2f BST)", 
-            total_history_days, today_data.valid_bars, InpJsonFileName, today_data.inc_net, today_data.dec_net);
+         PrintFormat("[Public Activity Delta] Exported %d days (%d today bars) to %s (IncNet=%.2f, DecNet=%.2f, RatiosFound=%s BST)", 
+            total_history_days, today_data.valid_bars, InpJsonFileName, today_data.inc_net, today_data.dec_net, ratios_found ? "YES" : "NO");
       }
    }
 }
 
 //+------------------------------------------------------------------+
-//| Determine 20-Min Crowd Behavior Tag                              |
+//| Determine Crowd Behavior Tag                                     |
 //+------------------------------------------------------------------+
 string BuildBehaviorTag(double inc, double dec)
 {

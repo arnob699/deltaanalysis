@@ -183,7 +183,10 @@ def merge_and_assemble_payload(raw_data: Dict[str, Any], date_query: Optional[st
                 existing["is_today"] = True
                 master_days_store[dt] = existing
         else:
-            if dt not in master_days_store or valid_bars >= master_days_store[dt].get("valid_bars", 0):
+            existing = master_days_store.get(dt)
+            incoming_has_ratio = any("ratio" in iv for iv in d.get("intervals", []))
+            existing_has_ratio = existing and any("ratio" in iv for iv in existing.get("intervals", []))
+            if (not existing) or (incoming_has_ratio and not existing_has_ratio) or (valid_bars > 0):
                 master_days_store[dt] = d
 
     # Sort all days descending by date (newest session first)

@@ -1286,7 +1286,7 @@ function initLiveChart() {
   });
 
   seriesRatio = tvChartRatio.addSeries(LightweightCharts.LineSeries, {
-    color: '#cbd5e1',
+    color: '#38bdf8',
     lineWidth: 2,
     crosshairMarkerVisible: true,
     title: 'Sentiment Ratio (% Longs)',

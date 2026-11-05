@@ -81,14 +81,14 @@ def get_delta_and_ratio_lookup() -> tuple[Dict[int, float], Dict[int, float]]:
                 inc = float(iv.get("inc_20m", 0.0))
                 delta_lookup[epoch] = inc
 
-                inc_net = float(iv.get("inc_running_net", 0.0))
-                dec_net = float(iv.get("dec_running_net", 0.0))
-                net_total = inc_net + dec_net
-
-                # Calculate sentiment ratio (% Longs) bounded realistically
-                ratio = 50.0 + (net_total * 2.5)
-                ratio = max(15.0, min(88.0, ratio))
-                ratio_lookup[epoch] = round(ratio, 2)
+                # Real Sentiment Ratio (% Longs) from MT5 FXSSI.Ratios
+                if "ratio" in iv and iv["ratio"] is not None:
+                    try:
+                        r_val = float(iv["ratio"])
+                        if 1.0 <= r_val <= 99.0:
+                            ratio_lookup[epoch] = round(r_val, 2)
+                    except (ValueError, TypeError):
+                        pass
             except Exception:
                 continue
 
@@ -149,43 +149,60 @@ def fetch_candles_from_mt5(symbol: str = "XAUUSDm", timeframe_str: str = "M20", 
     )
     df["mvp"] = np.where(df["date"] == latest_date, df["running_mvp"], df["date"].map(session_totals))
 
-    # Dynamic Sentiment Ratio (% Longs) calibrated to institutional range (44% to 86%)
-    p_high = float(df["high"].max())
-    p_low = float(df["low"].min())
-    p_range = max(10.0, p_high - p_low)
+    delta_lookup, ratio_lookup = get_delta_and_ratio_lookup()
+    sorted_delta_epochs = sorted(delta_lookup.keys())
+    sorted_delta_arr = np.array(sorted_delta_epochs) if sorted_delta_epochs else np.array([])
 
-    delta_lookup, _ = get_delta_and_ratio_lookup()
-    sorted_epochs = sorted(delta_lookup.keys())
-    sorted_arr = np.array(sorted_epochs) if sorted_epochs else np.array([])
+    sorted_ratio_epochs = sorted(ratio_lookup.keys())
+    sorted_ratio_arr = np.array(sorted_ratio_epochs) if sorted_ratio_epochs else np.array([])
 
     span_map = {"M20": 1200, "M30": 1800, "H1": 3600}
     bar_span = span_map.get(timeframe_str.upper(), 1200)
 
     candles_list: List[Dict[str, Any]] = []
+    last_known_ratio: Optional[float] = None
 
     for _, row in df.iterrows():
         t = int(row["time"])
 
-        if t in delta_lookup and bar_span == 1200:
+        # 1. Delta mapping
+        if t in delta_lookup:
             delta_val = delta_lookup[t]
-        elif len(sorted_arr) > 0:
-            idx_start = np.searchsorted(sorted_arr, t, side='left')
-            idx_end = np.searchsorted(sorted_arr, t + bar_span, side='left')
-            if idx_end > idx_start:
-                delta_val = sum(delta_lookup[sorted_epochs[k]] for k in range(idx_start, idx_end))
+        elif len(sorted_delta_arr) > 0:
+            if bar_span > 1200:
+                idx_start = np.searchsorted(sorted_delta_arr, t, side='left')
+                idx_end = np.searchsorted(sorted_delta_arr, t + bar_span, side='left')
+                if idx_end > idx_start:
+                    delta_val = sum(delta_lookup[sorted_delta_epochs[k]] for k in range(idx_start, idx_end))
+                else:
+                    idx = np.clip(np.searchsorted(sorted_delta_arr, t), 0, len(sorted_delta_arr) - 1)
+                    near_t = sorted_delta_epochs[idx]
+                    delta_val = delta_lookup[near_t] if abs(near_t - t) <= bar_span / 2 else 0.0
             else:
-                idx = np.clip(np.searchsorted(sorted_arr, t), 0, len(sorted_arr) - 1)
-                near_t = sorted_epochs[idx]
-                delta_val = delta_lookup[near_t] if abs(near_t - t) <= bar_span else 0.0
+                idx = np.clip(np.searchsorted(sorted_delta_arr, t), 0, len(sorted_delta_arr) - 1)
+                near_t = sorted_delta_epochs[idx]
+                delta_val = delta_lookup[near_t] if abs(near_t - t) <= bar_span / 2 else 0.0
         else:
             delta_val = 0.0
 
-        # Inverted crowd positioning: at low price retail is ~86% Long, at high price retail is ~44% Long
-        norm_p = (float(row["close"]) - p_low) / p_range
-        base_ratio = 86.0 - (norm_p * 42.0)
-        # Dynamic micro-shift based on interval delta
-        final_ratio = base_ratio + (float(delta_val) * 1.5)
-        ratio_val = round(float(np.clip(final_ratio, 41.0, 87.0)), 2)
+        # 2. Real Sentiment Ratio (% Longs) mapping
+        if t in ratio_lookup:
+            ratio_val = ratio_lookup[t]
+            last_known_ratio = ratio_val
+        elif len(sorted_ratio_arr) > 0:
+            idx = np.clip(np.searchsorted(sorted_ratio_arr, t), 0, len(sorted_ratio_arr) - 1)
+            near_t = sorted_ratio_epochs[idx]
+            if abs(near_t - t) <= bar_span:
+                ratio_val = ratio_lookup[near_t]
+                last_known_ratio = ratio_val
+            elif last_known_ratio is not None:
+                ratio_val = last_known_ratio
+            else:
+                ratio_val = None
+        elif last_known_ratio is not None:
+            ratio_val = last_known_ratio
+        else:
+            ratio_val = None
 
         candles_list.append({
             "time": t,
